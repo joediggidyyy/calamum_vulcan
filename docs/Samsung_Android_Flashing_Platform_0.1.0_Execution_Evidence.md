@@ -2107,11 +2107,17 @@ Follow-up verification from the consumer side:
 - browser check for `https://pypi.org/manage/account/`
 	- result: unauthenticated `Log in to PyPI` surface
 
+Browser-path clarification:
+
+- the embedded-browser PyPI check was only a diagnostic probe to confirm that no authenticated PyPI session already existed locally
+- the operator explicitly ruled out entering PyPI credentials in the embedded browser
+- the remaining production-publication action will be completed manually from GitHub rather than by creating a browser-based PyPI session in this workstation lane
+
 Current consequence:
 
 - the production PyPI project page for `calamum-vulcan` is still not populated by this release attempt
 - the remaining blocker is now specific: the available production credential is a **project-scoped** token and cannot complete this first live upload path for `calamum-vulcan`
-- the real-PyPI install-validation step remains blocked until a valid first-publication credential or equivalent authorized PyPI session is supplied
+- the real-PyPI install-validation step remains blocked until manual publication from GitHub or another authorized first-publication path completes the live upload
 
 ### Closeout posture after the admin follow-up
 
@@ -2121,9 +2127,9 @@ Current consequence:
 | `origin/main` push | completed | push result from 2026-04-19 |
 | annotated tag `v0.1.0` | completed | tag push result from 2026-04-19 |
 | GitHub release object | completed | `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.1.0` |
-| real PyPI publication | blocked by credential scope | available production credential is project-scoped and rejected for `calamum-vulcan` |
+| real PyPI publication | external manual step pending | local automated credentials are project-scoped and rejected for `calamum-vulcan`; manual GitHub-side publication remains the completion path |
 | real PyPI install validation | blocked by missing publication | package not visible via `pip index versions` |
 
 ## Next active surface
 
-The `0.1.0` rehearsal gate is satisfied, the git release boundary is sealed publicly through `origin/main` plus tag `v0.1.0`, and the GitHub release object is now live. The next active surface is therefore narrower than before: supply a first-publication production PyPI credential or equivalent authenticated PyPI session that is authorized for `calamum-vulcan`, complete the real PyPI upload, verify the live install path, and only then promote `0.2.0` planning to the active lane.
+The `0.1.0` rehearsal gate is satisfied, the git release boundary is sealed publicly through `origin/main` plus tag `v0.1.0`, and the GitHub release object is now live. The next active surface is therefore narrower than before: complete the manual GitHub-side publication to real PyPI, verify the live install path, and only then promote `0.2.0` planning to the active lane.

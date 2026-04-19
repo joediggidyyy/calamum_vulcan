@@ -884,7 +884,7 @@ When every open checkbox below is complete, the nested repo has fully closed the
 #### 3) Publish the public release surfaces
 
 - [x] Create the GitHub release for `v0.1.0` from the sealed tag with the final release notes and support posture.
-- [ ] Publish the `0.1.0` wheel and source distribution to the real PyPI project boundary, not only TestPyPI. Current blocker: the available machine-level and `.pypirc` production credentials both resolve to a project-scoped token that is not valid for this first live upload to `calamum-vulcan`.
+- [ ] Publish the `0.1.0` wheel and source distribution to the real PyPI project boundary, not only TestPyPI. Current blocker for this workstation lane: the available machine-level and `.pypirc` production credentials both resolve to a project-scoped token that is not valid for this first live upload to `calamum-vulcan`. Embedded-browser PyPI login is not part of the intended remediation path; the remaining publication step will be completed manually from GitHub.
 - [ ] Install the real PyPI release into a clean environment and rerun the core installed-artifact checks: help, ready describe-only review, evidence export, sprint-close bundle, uninstall, and reinstall.
 - [ ] Record the final public URLs for the GitHub release and PyPI project page in the closeout evidence. The GitHub release URL is now known; the PyPI project URL remains pending live publication.
 
