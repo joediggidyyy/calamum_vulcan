@@ -82,21 +82,20 @@ The packaging contract for `0.1.0` defines these installed entry points:
 
 ## Repository layout
 
-| Path              | Purpose                                                  |
-| ----------------- | -------------------------------------------------------- |
-| `calamum_vulcan/` | package source, launcher, fixtures, and runtime surfaces |
-| `tests/`          | unit and release-lane validation surfaces                |
-| `docs/`           | planning, evidence, and release-lane documentation       |
-| `LICENSE`         | project license                                          |
+| Path                                        | Purpose                                                  |
+| ------------------------------------------- | -------------------------------------------------------- |
+| `calamum_vulcan/`                           | package source, launcher, fixtures, and runtime surfaces |
+| `tests/`                                    | unit and release-lane validation surfaces                |
+| `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md` | tracked public documentation surfaces                    |
+| `LICENSE`                                   | project license                                          |
 
-## Documentation
+## Tracked documentation
 
-Primary planning surfaces live in `docs/`:
+The tracked documentation surface for this repository stays at the root:
 
-- `Samsung_Android_Flashing_Platform_Research_Report_and_Build_Plan.md`
-- `Samsung_Android_Flashing_Platform_0.1.0_Detailed_Planning.md`
-- `Samsung_Android_Flashing_Platform_0.1.0_Execution_Evidence.md`
-- `CHANGELOG.md`
+- `README.md` — install, build, support posture, and public usage guidance
+- `CHANGELOG.md` — release notes and user-visible change history
+- `CONTRIBUTING.md` — contributor workflow and release-lane checks
 
 ## Scope
 
