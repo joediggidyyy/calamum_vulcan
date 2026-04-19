@@ -20,6 +20,8 @@ Initial public packaging target for the Calamum Vulcan product shell.
 - empirical release review runner added for `FS-P05`
 - TestPyPI rehearsal and final publication-gate runner added for `FS-P06`
 - TestPyPI upload, registry-delivered install validation, uninstall/reinstall validation, and final `go` publication decision completed for `FS-P06`
+- live PyPI publication completed for `calamum-vulcan==0.1.0`
+- live GitHub release published at `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.1.0`
 
 ### Known limitations
 
