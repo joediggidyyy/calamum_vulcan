@@ -3,6 +3,9 @@ include CHANGELOG.md
 include CONTRIBUTING.md
 include LICENSE
 
+prune docs
+prune temp
+
 graft calamum_vulcan/assets/branding
 graft tests
 graft calamum_vulcan/fixtures/package_manifests

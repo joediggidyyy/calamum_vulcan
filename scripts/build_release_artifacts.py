@@ -42,6 +42,10 @@ EXPECTED_SDIST_SUFFIXES = (
   'calamum_vulcan/fixtures/package_manifests/matched_recovery_package.json',
   'tests/unit/test_integration_suite.py',
 )
+FORBIDDEN_SDIST_PREFIXES = (
+  'docs/',
+  'temp/',
+)
 
 
 def _print(lines: Sequence[str]) -> None:
@@ -102,6 +106,17 @@ def _inspect_sdist(sdist_path: Path) -> None:
         missing=', '.join(missing)
       )
     )
+  leaked = []
+  for name in names:
+    relative_name = name.split('/', 1)[1] if '/' in name else name
+    if any(relative_name.startswith(prefix) for prefix in FORBIDDEN_SDIST_PREFIXES):
+      leaked.append(relative_name)
+  if leaked:
+    raise SystemExit(
+      'sdist leaked forbidden entries: {leaked}'.format(
+        leaked=', '.join(sorted(set(leaked)))
+      )
+    )
 
 
 def main() -> int:
@@ -109,6 +124,10 @@ def main() -> int:
 
   if DIST_DIR.exists():
     shutil.rmtree(DIST_DIR)
+
+  for egg_info_dir in REPO_ROOT.glob('*.egg-info'):
+    if egg_info_dir.is_dir():
+      shutil.rmtree(egg_info_dir)
 
   _run([sys.executable, '-m', 'build', '--sdist', '--wheel'])
 
