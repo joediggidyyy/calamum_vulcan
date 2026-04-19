@@ -2063,40 +2063,55 @@ Observed git outcomes:
 
 This closes the git-boundary portion of the `0.1.0` closeout checklist.
 
-### GitHub release attempt
+### GitHub release publication
 
-The GitHub release object could not be created from the current workstation because the local authentication surface failed.
+The GitHub release object was completed after the initial local `gh` auth path failed.
 
-Observed blockers:
+Observed auth and publication path:
 
-- `gh auth status` reported the active `github.com` account token in keyring as invalid
-- browser navigation to the GitHub release-creation page redirected to the GitHub sign-in screen instead of an authenticated release form
+- `gh auth status` still reports the active `github.com` keyring token as invalid for the GitHub CLI lane
+- the machine-level git credential flow remained healthy through Git Credential Manager and Windows Credential Manager
+- `git credential fill` resolved a valid in-memory GitHub credential for `https://github.com/joediggidyyy/calamum_vulcan.git`
+- a direct GitHub REST call with that in-memory credential created the release successfully after an initial transient TLS handshake timeout from `gh release create`
 
-Current consequence:
+Publication result:
 
-- the sealed tag exists publicly on GitHub
-- the repository does **not** yet have a published GitHub release object for `v0.1.0`
+- GitHub release URL: `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.1.0`
+- public release title: `Calamum Vulcan 0.1.0`
+- release target tag: `v0.1.0`
+- release target commit: `d11a4ace26027aba944f03e61c63c3350477a0f7`
 
 ### Real PyPI publication attempt
 
-The first production upload attempt to the real PyPI index did **not** complete.
+The first production upload attempt to the real PyPI index still did **not** complete, even after switching from the `.pypirc` lane to the machine-level keyring lane.
 
-Observed production upload result:
+Observed credential surfaces:
+
+- user-level `.pypirc` production profile resolves to `username: __token__`
+- Windows Credential Manager contains a PyPI upload entry for `https://upload.pypi.org/legacy/`
+- `keyring.get_credential('https://upload.pypi.org/legacy/', None)` resolves a production credential with `username: __token__`
+
+Observed production upload results:
 
 - `python -m twine upload --repository pypi --non-interactive dist/*`
 	- result: `403 Forbidden`
-- verbose retry showed the server-side rejection reason:
+- retry through the machine-level keyring credential path with explicit `TWINE_USERNAME` and `TWINE_PASSWORD`
+	- result: `403 Forbidden`
+- verbose production retry showed the same server-side rejection reason for the live credential surface:
 	- `Invalid API Token: project-scoped token is not valid for project: 'calamum-vulcan'`
 
 Follow-up verification from the consumer side:
 
 - `python -m pip index versions calamum-vulcan`
 	- result: `ERROR: No matching distribution found for calamum-vulcan`
+- browser check for `https://pypi.org/manage/account/`
+	- result: unauthenticated `Log in to PyPI` surface
 
 Current consequence:
 
 - the production PyPI project page for `calamum-vulcan` is still not populated by this release attempt
-- the real-PyPI install-validation step remains blocked until a valid production token for `calamum-vulcan` is supplied
+- the remaining blocker is now specific: the available production credential is a **project-scoped** token and cannot complete this first live upload path for `calamum-vulcan`
+- the real-PyPI install-validation step remains blocked until a valid first-publication credential or equivalent authorized PyPI session is supplied
 
 ### Closeout posture after the admin follow-up
 
@@ -2105,10 +2120,10 @@ Current consequence:
 | git release commit | completed | `d11a4ace26027aba944f03e61c63c3350477a0f7` |
 | `origin/main` push | completed | push result from 2026-04-19 |
 | annotated tag `v0.1.0` | completed | tag push result from 2026-04-19 |
-| GitHub release object | blocked by auth | invalid `gh` keyring token and unauthenticated browser session |
-| real PyPI publication | blocked by auth | invalid project-scoped token for `calamum-vulcan` |
+| GitHub release object | completed | `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.1.0` |
+| real PyPI publication | blocked by credential scope | available production credential is project-scoped and rejected for `calamum-vulcan` |
 | real PyPI install validation | blocked by missing publication | package not visible via `pip index versions` |
 
 ## Next active surface
 
-The `0.1.0` rehearsal gate is satisfied and the git release boundary is now sealed publicly through `origin/main` plus tag `v0.1.0`. The next active surface is still the `0.1.0` closeout lane, not `0.2.0`: repair the GitHub authentication surface, replace the invalid production PyPI token with one authorized for `calamum-vulcan`, complete the GitHub release and real PyPI publication, verify the live install path, and only then promote `0.2.0` planning to the active lane.
+The `0.1.0` rehearsal gate is satisfied, the git release boundary is sealed publicly through `origin/main` plus tag `v0.1.0`, and the GitHub release object is now live. The next active surface is therefore narrower than before: supply a first-publication production PyPI credential or equivalent authenticated PyPI session that is authorized for `calamum-vulcan`, complete the real PyPI upload, verify the live install path, and only then promote `0.2.0` planning to the active lane.

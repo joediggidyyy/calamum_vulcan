@@ -854,11 +854,11 @@ When every open checkbox below is complete, the nested repo has fully closed the
 | Surface | Current state | Evidence anchor |
 | ------- | ------------- | --------------- |
 | publication rehearsal | `FS-P06` completed with `publication_decision="go"` | `temp/fs_p06_testpypi_rehearsal/testpypi_rehearsal_summary.json` |
-| release branch | `origin/main` now contains the sealed `0.1.0` closeout commit `d11a4ace26027aba944f03e61c63c3350477a0f7` | `git rev-parse HEAD`, `git push origin main` result from 2026-04-19 |
-| release working tree | the final release tree was sealed into commit `d11a4ac` before post-closeout documentation updates reopened the local working tree | closeout commit output from 2026-04-19 |
+| release branch | `origin/main` now contains the sealed `0.1.0` closeout commit `d11a4ace26027aba944f03e61c63c3350477a0f7` plus the pushed follow-up evidence commit `d19d2b0f87875ed582aedf1e28f8b90c22d49b2c` | `git push origin main` results from 2026-04-19 |
+| release working tree | clean after the pushed closeout-evidence update | `git status --short --branch` result from 2026-04-19 |
 | tag boundary | annotated tag `v0.1.0` now exists locally and on `origin` at `d11a4ace26027aba944f03e61c63c3350477a0f7` | `git push origin v0.1.0` result from 2026-04-19 |
-| GitHub release object | still not created because the local GitHub auth surfaces failed during closeout (`gh` keyring token invalid and browser session unauthenticated) | `gh auth status`, GitHub release browser sign-in redirect from 2026-04-19 |
-| PyPI production publication | still not published because the configured project-scoped API token is invalid for project `calamum-vulcan` | real PyPI upload attempt from 2026-04-19 |
+| GitHub release object | published at `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.1.0` using the machine-level git credential flow for API auth | GitHub release page and REST creation result from 2026-04-19 |
+| PyPI production publication | still not published because the available production credential is a project-scoped token that is not valid for this first live upload to `calamum-vulcan` | verbose real PyPI upload result from 2026-04-19 |
 
 ### Already satisfied
 
@@ -883,10 +883,10 @@ When every open checkbox below is complete, the nested repo has fully closed the
 
 #### 3) Publish the public release surfaces
 
-- [ ] Create the GitHub release for `v0.1.0` from the sealed tag with the final release notes and support posture. Current blocker: the local GitHub CLI keyring token is invalid and the browser session is not authenticated.
-- [ ] Publish the `0.1.0` wheel and source distribution to the real PyPI project boundary, not only TestPyPI. Current blocker: the configured project-scoped PyPI API token is not valid for `calamum-vulcan`.
+- [x] Create the GitHub release for `v0.1.0` from the sealed tag with the final release notes and support posture.
+- [ ] Publish the `0.1.0` wheel and source distribution to the real PyPI project boundary, not only TestPyPI. Current blocker: the available machine-level and `.pypirc` production credentials both resolve to a project-scoped token that is not valid for this first live upload to `calamum-vulcan`.
 - [ ] Install the real PyPI release into a clean environment and rerun the core installed-artifact checks: help, ready describe-only review, evidence export, sprint-close bundle, uninstall, and reinstall.
-- [ ] Record the final public URLs for the GitHub release and PyPI project page in the closeout evidence.
+- [ ] Record the final public URLs for the GitHub release and PyPI project page in the closeout evidence. The GitHub release URL is now known; the PyPI project URL remains pending live publication.
 
 #### 4) Capture the final closeout evidence pack
 
