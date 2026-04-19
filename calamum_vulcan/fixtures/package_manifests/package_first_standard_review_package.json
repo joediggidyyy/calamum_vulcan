@@ -1,0 +1,45 @@
+{
+  "schema_version": "0.1.0-frame2",
+  "identity": {
+    "package_id": "package-first-demo",
+    "name": "Calamum Package-First Review Package",
+    "version": "0.1.0",
+    "manufacturer": "Samsung",
+    "source_build": "N975F-PACKAGE-FIRST"
+  },
+  "compatibility": {
+    "expectation": "matched",
+    "supported_product_codes": [
+      "SM-N975F"
+    ],
+    "supported_device_names": [
+      "Galaxy Note10+"
+    ],
+    "pit_fingerprint": "PIT-N975F-READY-001"
+  },
+  "flash_plan": {
+    "risk_level": "standard",
+    "repartition_allowed": false,
+    "reboot_policy": "standard",
+    "partitions": [
+      {
+        "partition_name": "RECOVERY",
+        "file_name": "recovery.img",
+        "checksum_id": "recovery-img",
+        "required": true
+      }
+    ],
+    "post_flash_instructions": [
+      "Package-first review keeps package truth visible before device arrival.",
+      "Confirm compatibility before opening the trust gate."
+    ]
+  },
+  "checksums": [
+    {
+      "checksum_id": "recovery-img",
+      "file_name": "recovery.img",
+      "algorithm": "sha256",
+      "value_placeholder": "PLACEHOLDER_SHA256_RECOVERY_IMG"
+    }
+  ]
+}

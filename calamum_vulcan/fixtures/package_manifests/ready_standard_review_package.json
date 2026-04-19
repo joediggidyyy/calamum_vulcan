@@ -1,0 +1,57 @@
+{
+  "schema_version": "0.1.0-frame2",
+  "identity": {
+    "package_id": "regional-match-demo",
+    "name": "Calamum Regional Match Review Package",
+    "version": "0.1.0",
+    "manufacturer": "Samsung",
+    "source_build": "G991U-REGIONAL-REVIEW"
+  },
+  "compatibility": {
+    "expectation": "matched",
+    "supported_product_codes": [
+      "SM-G991U"
+    ],
+    "supported_device_names": [
+      "Galaxy S21"
+    ],
+    "pit_fingerprint": "PIT-G991U-READY-001"
+  },
+  "flash_plan": {
+    "risk_level": "standard",
+    "repartition_allowed": false,
+    "reboot_policy": "standard",
+    "partitions": [
+      {
+        "partition_name": "RECOVERY",
+        "file_name": "recovery.img",
+        "checksum_id": "recovery-img",
+        "required": true
+      },
+      {
+        "partition_name": "VBMETA",
+        "file_name": "vbmeta.img",
+        "checksum_id": "vbmeta-img",
+        "required": false
+      }
+    ],
+    "post_flash_instructions": [
+      "Review regional firmware notes before first boot.",
+      "Confirm recovery and vbmeta alignment before release validation."
+    ]
+  },
+  "checksums": [
+    {
+      "checksum_id": "recovery-img",
+      "file_name": "recovery.img",
+      "algorithm": "sha256",
+      "value_placeholder": "PLACEHOLDER_SHA256_RECOVERY_IMG"
+    },
+    {
+      "checksum_id": "vbmeta-img",
+      "file_name": "vbmeta.img",
+      "algorithm": "sha256",
+      "value_placeholder": "PLACEHOLDER_SHA256_VBMETA_IMG"
+    }
+  ]
+}

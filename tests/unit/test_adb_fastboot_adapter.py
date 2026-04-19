@@ -1,0 +1,153 @@
+"""Unit tests for the Calamum Vulcan ADB/Fastboot companion adapter."""
+
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+import unittest
+from unittest import mock
+
+
+FINAL_EXAM_ROOT = Path(__file__).resolve().parents[2]
+if str(FINAL_EXAM_ROOT) not in sys.path:
+  sys.path.insert(0, str(FINAL_EXAM_ROOT))
+
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsBackend
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsProcessResult
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsTraceState
+from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_adb_reboot_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_fastboot_detect_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_fastboot_reboot_command_plan
+from calamum_vulcan.adapters.adb_fastboot import execute_android_tools_command
+from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
+from calamum_vulcan.adapters.adb_fastboot import runtime as adb_fastboot_runtime
+
+
+class AdbFastbootAdapterTests(unittest.TestCase):
+  """Prove the bounded ADB/Fastboot companion seam stays explicit."""
+
+  def test_adb_detect_plan_uses_devices_long_output(self) -> None:
+    command_plan = build_adb_detect_command_plan(device_serial='R58N12345AB')
+
+    self.assertEqual(command_plan.backend, AndroidToolsBackend.ADB)
+    self.assertEqual(command_plan.arguments, ('-s', 'R58N12345AB', 'devices', '-l'))
+    self.assertEqual(command_plan.display_command, 'adb -s R58N12345AB devices -l')
+
+  def test_adb_detection_normalizes_ready_and_unauthorized_devices(self) -> None:
+    command_plan = build_adb_detect_command_plan()
+    process_result = AndroidToolsProcessResult(
+      fixture_name='adb-mixed',
+      operation=AndroidToolsOperation.ADB_DEVICES,
+      backend=AndroidToolsBackend.ADB,
+      exit_code=0,
+      stdout_lines=(
+        'List of devices attached',
+        'R58N12345AB\tdevice usb:1-1 product:dm3q model:SM_G991U device:dm3q',
+        '192.168.0.10:5555\tunauthorized model:SM_G991U device:dm3q',
+      ),
+    )
+
+    trace = normalize_android_tools_result(command_plan, process_result)
+
+    self.assertEqual(trace.state, AndroidToolsTraceState.DETECTED)
+    self.assertEqual(len(trace.detected_devices), 2)
+    self.assertEqual(trace.detected_devices[0].transport, 'usb')
+    self.assertEqual(trace.detected_devices[1].transport, 'tcpip')
+    self.assertIn('command-ready', trace.summary)
+    self.assertTrue(
+      any('unauthorized' in note for note in trace.notes)
+    )
+
+  def test_fastboot_detection_normalizes_connected_device(self) -> None:
+    command_plan = build_fastboot_detect_command_plan()
+    process_result = AndroidToolsProcessResult(
+      fixture_name='fastboot-ready',
+      operation=AndroidToolsOperation.FASTBOOT_DEVICES,
+      backend=AndroidToolsBackend.FASTBOOT,
+      exit_code=0,
+      stdout_lines=('R58N12345AB\tfastboot',),
+    )
+
+    trace = normalize_android_tools_result(command_plan, process_result)
+
+    self.assertEqual(trace.state, AndroidToolsTraceState.DETECTED)
+    self.assertEqual(trace.detected_devices[0].serial, 'R58N12345AB')
+    self.assertEqual(trace.detected_devices[0].state, 'fastboot')
+
+  def test_vendor_specific_download_reboot_plan_is_flagged(self) -> None:
+    command_plan = build_adb_reboot_command_plan(
+      'download',
+      device_serial='R58N12345AB',
+    )
+
+    self.assertTrue(command_plan.vendor_specific)
+    self.assertEqual(command_plan.reboot_target, 'download')
+    self.assertEqual(
+      command_plan.display_command,
+      'adb -s R58N12345AB reboot download',
+    )
+    self.assertTrue(command_plan.notes)
+
+  def test_runtime_runner_normalizes_successful_reboot(self) -> None:
+    command_plan = build_fastboot_reboot_command_plan('bootloader')
+
+    def fake_runner(_command_plan):
+      return AndroidToolsProcessResult(
+        fixture_name='live-fastboot-reboot',
+        operation=AndroidToolsOperation.FASTBOOT_REBOOT,
+        backend=AndroidToolsBackend.FASTBOOT,
+        exit_code=0,
+      )
+
+    trace = execute_android_tools_command(command_plan, runner=fake_runner)
+
+    self.assertEqual(trace.state, AndroidToolsTraceState.COMPLETED)
+    self.assertEqual(trace.summary, 'FASTBOOT reboot command accepted for target bootloader.')
+
+  def test_runtime_resolves_default_windows_sdk_platform_tools_path(self) -> None:
+    candidate = Path('C:/Users/tester/AppData/Local/Android/Sdk/platform-tools/adb.exe')
+
+    with mock.patch.object(adb_fastboot_runtime.shutil, 'which', return_value=None):
+      with mock.patch.object(adb_fastboot_runtime, 'os') as mocked_os:
+        mocked_os.name = 'nt'
+        mocked_os.getenv.side_effect = lambda key: {
+          'ANDROID_SDK_ROOT': None,
+          'ANDROID_HOME': None,
+          'LOCALAPPDATA': 'C:/Users/tester/AppData/Local',
+        }.get(key)
+        with mock.patch.object(adb_fastboot_runtime.Path, 'exists', autospec=True) as mocked_exists:
+          mocked_exists.side_effect = lambda path: str(path) == str(candidate)
+          resolved = adb_fastboot_runtime._resolve_executable('adb')
+
+    self.assertEqual(resolved, str(candidate))
+
+  def test_runtime_returns_timeout_result_for_hung_command(self) -> None:
+    command_plan = build_adb_detect_command_plan()
+    timeout_error = subprocess.TimeoutExpired(
+      cmd=['adb', 'devices', '-l'],
+      timeout=adb_fastboot_runtime.PROCESS_TIMEOUT_SECONDS,
+      output='List of devices attached\n',
+      stderr='device query stalled',
+    )
+
+    with mock.patch.object(adb_fastboot_runtime, '_resolve_executable', return_value='adb'):
+      with mock.patch.object(
+        adb_fastboot_runtime.subprocess,
+        'run',
+        side_effect=timeout_error,
+      ):
+        process_result = adb_fastboot_runtime._run_process(
+          command_plan,
+          fixture_name='live-process',
+        )
+
+    self.assertEqual(process_result.exit_code, 124)
+    self.assertEqual(process_result.stdout_lines, ('List of devices attached',))
+    self.assertIn('timed out after', process_result.stderr_lines[-1])
+
+
+if __name__ == '__main__':
+  unittest.main()

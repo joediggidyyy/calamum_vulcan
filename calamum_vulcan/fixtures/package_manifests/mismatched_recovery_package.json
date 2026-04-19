@@ -1,0 +1,44 @@
+{
+  "schema_version": "0.1.0-frame1",
+  "identity": {
+    "package_id": "regional-mismatch-demo",
+    "name": "Calamum Recovery Regional Mismatch Fixture",
+    "version": "0.1.0",
+    "manufacturer": "Samsung",
+    "source_build": "G991UXXS9EWA1"
+  },
+  "compatibility": {
+    "expectation": "mismatch",
+    "supported_product_codes": [
+      "SM-G991U"
+    ],
+    "supported_device_names": [
+      "Galaxy S21"
+    ],
+    "pit_fingerprint": "PIT-G991U-LAB-002"
+  },
+  "flash_plan": {
+    "risk_level": "standard",
+    "repartition_allowed": false,
+    "reboot_policy": "standard",
+    "partitions": [
+      {
+        "partition_name": "RECOVERY",
+        "file_name": "recovery.img",
+        "checksum_id": "recovery-img",
+        "required": true
+      }
+    ],
+    "post_flash_instructions": [
+      "Review the product-code mismatch before proceeding."
+    ]
+  },
+  "checksums": [
+    {
+      "checksum_id": "recovery-img",
+      "file_name": "recovery.img",
+      "algorithm": "sha256",
+      "value_placeholder": "PLACEHOLDER_SHA256_RECOVERY_IMG"
+    }
+  ]
+}

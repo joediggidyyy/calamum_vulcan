@@ -1,0 +1,27 @@
+{
+  "schema_version": "0.1.0-frame1",
+  "identity": {
+    "package_id": "calamum-recovery-lab-003",
+    "name": "Calamum Recovery Incomplete Fixture",
+    "version": "0.1.0",
+    "manufacturer": "Samsung",
+    "source_build": "INCOMPLETE-LAB-BUILD"
+  },
+  "compatibility": {
+    "expectation": "incomplete",
+    "supported_product_codes": [
+      "SM-N975F"
+    ],
+    "supported_device_names": [
+      "Galaxy Note10+"
+    ]
+  },
+  "flash_plan": {
+    "risk_level": "advanced",
+    "repartition_allowed": false,
+    "reboot_policy": "standard",
+    "post_flash_instructions": [
+      "This fixture intentionally omits required fields for contract testing."
+    ]
+  }
+}

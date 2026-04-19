@@ -1,0 +1,69 @@
+[build-system]
+requires = [
+  "setuptools>=77",
+  "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "calamum_vulcan"
+version = "0.1.0"
+description = "Samsung-focused open-source Android flashing platform with GUI-first workflows, preflight validation, and audit-ready evidence."
+readme = { file = "README.md", content-type = "text/markdown" }
+requires-python = ">=3.14,<3.15"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Joe Waller" },
+]
+keywords = [
+  "android",
+  "samsung",
+  "flashing",
+  "gui",
+  "heimdall",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: System :: Hardware",
+]
+dependencies = [
+  "PySide6>=6.8,<7",
+]
+
+[project.optional-dependencies]
+release = [
+  "build>=1.2,<2",
+  "twine>=6,<7",
+]
+
+[project.urls]
+Homepage = "https://github.com/joediggidyyy/calamum_vulcan"
+Repository = "https://github.com/joediggidyyy/calamum_vulcan"
+Issues = "https://github.com/joediggidyyy/calamum_vulcan/issues"
+Documentation = "https://github.com/joediggidyyy/calamum_vulcan/tree/main/docs"
+Changelog = "https://github.com/joediggidyyy/calamum_vulcan/blob/main/CHANGELOG.md"
+
+[project.scripts]
+calamum-vulcan = "calamum_vulcan.app.__main__:main"
+
+[project.gui-scripts]
+calamum-vulcan-gui = "calamum_vulcan.app.__main__:gui_main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["calamum_vulcan*"]
+exclude = ["tests*", "docs*"]
+
+[tool.setuptools.package-data]
+"calamum_vulcan" = ["assets/branding/*.png"]
+"calamum_vulcan.fixtures" = ["package_manifests/*.json"]
