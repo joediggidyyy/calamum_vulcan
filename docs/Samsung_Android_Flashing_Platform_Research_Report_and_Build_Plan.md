@@ -854,9 +854,11 @@ When every open checkbox below is complete, the nested repo has fully closed the
 | Surface | Current state | Evidence anchor |
 | ------- | ------------- | --------------- |
 | publication rehearsal | `FS-P06` completed with `publication_decision="go"` | `temp/fs_p06_testpypi_rehearsal/testpypi_rehearsal_summary.json` |
-| release branch | `main` tracks `origin/main` at the same commit boundary | `.git/HEAD`, `.git/config`, `.git/refs/heads/main`, `.git/refs/remotes/origin/main` |
-| release working tree | local release-root changes are still present and need to be sealed into the final release commit | current changed-file view from the nested repo |
-| tag boundary | no local `v0.1.0` tag is present yet; the final tag/release boundary still needs to be created explicitly | `.git/refs/tags/` |
+| release branch | `origin/main` now contains the sealed `0.1.0` closeout commit `d11a4ace26027aba944f03e61c63c3350477a0f7` | `git rev-parse HEAD`, `git push origin main` result from 2026-04-19 |
+| release working tree | the final release tree was sealed into commit `d11a4ac` before post-closeout documentation updates reopened the local working tree | closeout commit output from 2026-04-19 |
+| tag boundary | annotated tag `v0.1.0` now exists locally and on `origin` at `d11a4ace26027aba944f03e61c63c3350477a0f7` | `git push origin v0.1.0` result from 2026-04-19 |
+| GitHub release object | still not created because the local GitHub auth surfaces failed during closeout (`gh` keyring token invalid and browser session unauthenticated) | `gh auth status`, GitHub release browser sign-in redirect from 2026-04-19 |
+| PyPI production publication | still not published because the configured project-scoped API token is invalid for project `calamum-vulcan` | real PyPI upload attempt from 2026-04-19 |
 
 ### Already satisfied
 
@@ -868,21 +870,21 @@ When every open checkbox below is complete, the nested repo has fully closed the
 
 #### 1) Freeze the final `0.1.0` release tree
 
-- [ ] Review the current dirty working tree in the nested release root and decide exactly which pending files belong inside the final `0.1.0` boundary.
-- [ ] If any artifact-producing surface changed after the green `FS-P06` rehearsal, rerun the affected release runners and refresh the artifact hashes before sealing the boundary.
-- [ ] Confirm the final public docs, changelog language, and evidence references all still point to the same `0.1.0` artifact set.
+- [x] Review the current dirty working tree in the nested release root and decide exactly which pending files belong inside the final `0.1.0` boundary.
+- [x] If any artifact-producing surface changed after the green `FS-P06` rehearsal, rerun the affected release runners and refresh the artifact hashes before sealing the boundary.
+- [x] Confirm the final public docs, changelog language, and evidence references all still point to the same `0.1.0` artifact set.
 
 #### 2) Seal the git release boundary
 
-- [ ] Create the final `0.1.0` release commit from the nested repo root.
-- [ ] Push `main` so `origin/main` contains the exact closeout commit.
-- [ ] Create an annotated git tag `v0.1.0` at the sealed release commit.
-- [ ] Push the tag and verify the tag, commit SHA, artifact hashes, and release evidence all resolve to the same boundary.
+- [x] Create the final `0.1.0` release commit from the nested repo root.
+- [x] Push `main` so `origin/main` contains the exact closeout commit.
+- [x] Create an annotated git tag `v0.1.0` at the sealed release commit.
+- [x] Push the tag and verify the tag, commit SHA, artifact hashes, and release evidence all resolve to the same boundary.
 
 #### 3) Publish the public release surfaces
 
-- [ ] Create the GitHub release for `v0.1.0` from the sealed tag with the final release notes and support posture.
-- [ ] Publish the `0.1.0` wheel and source distribution to the real PyPI project boundary, not only TestPyPI.
+- [ ] Create the GitHub release for `v0.1.0` from the sealed tag with the final release notes and support posture. Current blocker: the local GitHub CLI keyring token is invalid and the browser session is not authenticated.
+- [ ] Publish the `0.1.0` wheel and source distribution to the real PyPI project boundary, not only TestPyPI. Current blocker: the configured project-scoped PyPI API token is not valid for `calamum-vulcan`.
 - [ ] Install the real PyPI release into a clean environment and rerun the core installed-artifact checks: help, ready describe-only review, evidence export, sprint-close bundle, uninstall, and reinstall.
 - [ ] Record the final public URLs for the GitHub release and PyPI project page in the closeout evidence.
 

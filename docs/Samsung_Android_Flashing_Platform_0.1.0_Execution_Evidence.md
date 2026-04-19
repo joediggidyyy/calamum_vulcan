@@ -2013,6 +2013,102 @@ Current publication-gate status after the rerun:
 - `FS-P06` now passes with a successful TestPyPI upload and registry-delivered validation from the nested release root
 - the publication lane now has an explicit per-stack security closure rule rather than treating security as a separate late-stage discussion
 
+## Release-admin follow-up after the green rehearsal gate
+
+**Execution date:** 2026-04-19
+
+The release-admin lane resumed after the green `FS-P06` rehearsal to convert the candidate boundary into the real public `0.1.0` release boundary.
+
+### Final validation rerun before sealing
+
+Release-root validation was rerun from the current tree in the approved environment before the git boundary was sealed.
+
+Observed results:
+
+- `python -m unittest discover -s tests/unit -p "test_*.py"`
+	- result: `Ran 62 tests in 4.087s` / `OK`
+- `python scripts/build_release_artifacts.py`
+	- result: `artifact_contract="passed"`
+	- security result: `passed_with_warnings`
+- `python scripts/validate_installed_artifact.py`
+	- result: `installed_artifact_contract="passed"`
+	- security result: `passed_with_warnings`
+- `python scripts/run_scripted_simulation_suite.py`
+	- result: `scripted_simulation_contract="passed"`
+	- security result: `passed_with_warnings`
+- `python scripts/run_empirical_review_stack.py`
+	- result: `empirical_review_contract="passed"`
+	- security result: `passed_with_warnings`
+- `python scripts/run_testpypi_rehearsal.py`
+	- result: `publication_decision="go"`
+	- security result: `passed_with_warnings`
+
+Artifact hashes from the final rerun before sealing:
+
+- wheel `calamum_vulcan-0.1.0-py3-none-any.whl`: `5b54aa69d3fdba5ca654b7b4e79a2c760e00aaa01fa0a675252789b2ef7617e2`
+- sdist `calamum_vulcan-0.1.0.tar.gz`: `47e04409730546dc728bc8c92d4458a2c6cc6d76549f33917fdb1a25268e52ff`
+
+### Git boundary closure
+
+The sealed closeout boundary was created successfully from the nested release root.
+
+Observed git outcomes:
+
+- final release commit created:
+	- short SHA: `d11a4ac`
+	- full SHA: `d11a4ace26027aba944f03e61c63c3350477a0f7`
+	- message: `feat(release): finalize 0.1.0 release tree`
+- `main` pushed successfully to `origin`
+- annotated tag `v0.1.0` created and pushed successfully to `origin`
+
+This closes the git-boundary portion of the `0.1.0` closeout checklist.
+
+### GitHub release attempt
+
+The GitHub release object could not be created from the current workstation because the local authentication surface failed.
+
+Observed blockers:
+
+- `gh auth status` reported the active `github.com` account token in keyring as invalid
+- browser navigation to the GitHub release-creation page redirected to the GitHub sign-in screen instead of an authenticated release form
+
+Current consequence:
+
+- the sealed tag exists publicly on GitHub
+- the repository does **not** yet have a published GitHub release object for `v0.1.0`
+
+### Real PyPI publication attempt
+
+The first production upload attempt to the real PyPI index did **not** complete.
+
+Observed production upload result:
+
+- `python -m twine upload --repository pypi --non-interactive dist/*`
+	- result: `403 Forbidden`
+- verbose retry showed the server-side rejection reason:
+	- `Invalid API Token: project-scoped token is not valid for project: 'calamum-vulcan'`
+
+Follow-up verification from the consumer side:
+
+- `python -m pip index versions calamum-vulcan`
+	- result: `ERROR: No matching distribution found for calamum-vulcan`
+
+Current consequence:
+
+- the production PyPI project page for `calamum-vulcan` is still not populated by this release attempt
+- the real-PyPI install-validation step remains blocked until a valid production token for `calamum-vulcan` is supplied
+
+### Closeout posture after the admin follow-up
+
+| Surface | Status | Evidence |
+| ------- | ------ | -------- |
+| git release commit | completed | `d11a4ace26027aba944f03e61c63c3350477a0f7` |
+| `origin/main` push | completed | push result from 2026-04-19 |
+| annotated tag `v0.1.0` | completed | tag push result from 2026-04-19 |
+| GitHub release object | blocked by auth | invalid `gh` keyring token and unauthenticated browser session |
+| real PyPI publication | blocked by auth | invalid project-scoped token for `calamum-vulcan` |
+| real PyPI install validation | blocked by missing publication | package not visible via `pip index versions` |
+
 ## Next active surface
 
-The `0.1.0` rehearsal gate is now satisfied. The next active surface is no longer credential re-entry; it is whichever follow-on release or post-`0.1.0` hardening lane is chosen next, with the master build plan still carrying the warning-tier package-security and execution-path-hardening debt for that boundary.
+The `0.1.0` rehearsal gate is satisfied and the git release boundary is now sealed publicly through `origin/main` plus tag `v0.1.0`. The next active surface is still the `0.1.0` closeout lane, not `0.2.0`: repair the GitHub authentication surface, replace the invalid production PyPI token with one authorized for `calamum-vulcan`, complete the GitHub release and real PyPI publication, verify the live install path, and only then promote `0.2.0` planning to the active lane.
