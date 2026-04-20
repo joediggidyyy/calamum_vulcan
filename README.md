@@ -90,7 +90,7 @@ The packaging contract for `0.2.0` defines these installed entry points:
 | ------------------------------------------- | -------------------------------------------------------- |
 | `calamum_vulcan/`                           | package source, launcher, fixtures, and runtime surfaces |
 | `tests/`                                    | unit and release-lane validation surfaces                |
-| `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md` | tracked public documentation surfaces                    |
+| `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md` | tracked public documentation surfaces                    |
 | `LICENSE`                                   | project license                                          |
 
 ## Tracked documentation
@@ -100,6 +100,9 @@ The tracked documentation surface for this repository stays at the root:
 - `README.md` — install, build, support posture, and public usage guidance
 - `CHANGELOG.md` — release notes and user-visible change history
 - `CONTRIBUTING.md` — contributor workflow and release-lane checks
+- `SECURITY.md` — private vulnerability-reporting and disclosure guidance
+
+If you need to report a security issue, use `SECURITY.md` and prefer a private disclosure path over a public issue.
 
 ## Scope
 

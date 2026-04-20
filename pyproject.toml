@@ -50,6 +50,7 @@ Repository = "https://github.com/joediggidyyy/calamum_vulcan"
 Issues = "https://github.com/joediggidyyy/calamum_vulcan/issues"
 Documentation = "https://github.com/joediggidyyy/calamum_vulcan#readme"
 Changelog = "https://github.com/joediggidyyy/calamum_vulcan/blob/main/CHANGELOG.md"
+Security = "https://github.com/joediggidyyy/calamum_vulcan/blob/main/SECURITY.md"
 
 [project.scripts]
 calamum-vulcan = "calamum_vulcan.app.__main__:main"

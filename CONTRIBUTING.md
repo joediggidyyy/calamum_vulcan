@@ -45,6 +45,12 @@ Keep public-facing docs:
 - aligned to the release root as the public boundary
 - explicit about validated versus planned behavior
 
+## Security reports
+
+If you discover a potentially sensitive vulnerability, do not open a public issue first.
+
+Use the private reporting guidance in `SECURITY.md`.
+
 ## Scope discipline
 
 For `0.1.0` publication work:
