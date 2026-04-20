@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Optional
 from typing import Tuple
 
+from calamum_vulcan.domain.flash_plan import ReviewedFlashPlan
+from calamum_vulcan.domain.flash_plan import build_reviewed_flash_plan
 from calamum_vulcan.domain.package import PackageManifestAssessment
-from calamum_vulcan.domain.package import RebootPolicy
 
 from .model import HeimdallCapability
 from .model import HeimdallCommandPlan
@@ -54,16 +55,29 @@ def build_flash_command_plan(
 ) -> HeimdallCommandPlan:
   """Build the sanctioned Heimdall flash command plan from package truth."""
 
-  if not package_assessment.partitions:
+  reviewed_flash_plan = build_reviewed_flash_plan(package_assessment)
+  return build_flash_command_plan_from_reviewed_plan(reviewed_flash_plan)
+
+
+def build_flash_command_plan_from_reviewed_plan(
+  reviewed_flash_plan: ReviewedFlashPlan,
+) -> HeimdallCommandPlan:
+  """Build the sanctioned Heimdall flash command plan from reviewed plan truth."""
+
+  if not reviewed_flash_plan.partitions:
     raise ValueError('Flash command plan requires at least one partition entry.')
+  if not reviewed_flash_plan.ready_for_transport:
+    raise ValueError(
+      'Flash command plan requires a transport-ready reviewed flash plan.'
+    )
 
   arguments = ['flash']
-  for partition in package_assessment.partitions:
+  for partition in reviewed_flash_plan.partitions:
     arguments.append('--' + partition.partition_name.upper())
     arguments.append(partition.file_name)
-  if package_assessment.repartition_allowed:
+  if reviewed_flash_plan.repartition_allowed:
     arguments.append('--repartition')
-  if package_assessment.reboot_policy == RebootPolicy.NO_REBOOT:
+  if reviewed_flash_plan.reboot_policy == 'no_reboot':
     arguments.append('--no-reboot')
 
   return _command_plan(

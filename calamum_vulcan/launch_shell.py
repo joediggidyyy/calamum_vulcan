@@ -15,4 +15,4 @@ from calamum_vulcan.app.__main__ import gui_main
 
 
 if __name__ == '__main__':
-  raise SystemExit(gui_main())
+  raise SystemExit(gui_main(sys.argv[1:]))

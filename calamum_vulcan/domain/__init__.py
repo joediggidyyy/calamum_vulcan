@@ -1,3 +1,3 @@
 """Domain contracts for Calamum Vulcan."""
 
-__all__ = ['package', 'preflight', 'reporting', 'state']
+__all__ = ['flash_plan', 'package', 'preflight', 'reporting', 'state']

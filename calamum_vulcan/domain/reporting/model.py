@@ -23,8 +23,10 @@ REQUIRED_SESSION_REPORT_FIELDS = (
   'host',
   'device',
   'package',
+  'flash_plan',
   'preflight',
   'transport',
+  'transcript',
   'outcome',
   'decision_trace',
   'log_lines',
@@ -53,7 +55,12 @@ class DeviceEvidence:
   device_present: bool
   device_id: Optional[str]
   product_code: Optional[str]
+  canonical_product_code: Optional[str]
+  marketing_name: Optional[str]
+  registry_match_kind: str
   mode: Optional[str]
+  mode_entry_instructions: Tuple[str, ...] = ()
+  known_quirks: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -61,17 +68,62 @@ class PackageEvidence:
   """Package summary fields carried into the reporting layer."""
 
   fixture_name: Optional[str]
+  source_kind: str
   package_id: str
   display_name: str
   version: str
   source_build: str
   risk_level: str
   compatibility_expectation: str
+  compatibility_summary: str
   contract_complete: bool
   issue_count: int
   partition_count: int
   checksum_count: int
+  checksum_verification_complete: bool
+  verified_checksum_count: int
+  snapshot_id: Optional[str]
+  snapshot_created_at_utc: Optional[str]
+  snapshot_verified: bool
+  snapshot_drift_detected: bool
+  snapshot_issue_count: int
+  suspicious_warning_count: int
+  suspiciousness_summary: str
+  suspicious_indicator_ids: Tuple[str, ...] = ()
+  suspicious_titles: Tuple[str, ...] = ()
   contract_issues: Tuple[str, ...] = ()
+  snapshot_issues: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class FlashPlanEvidence:
+  """Reviewed flash-plan evidence carried into the reporting layer."""
+
+  schema_version: str
+  plan_id: str
+  summary: str
+  source_kind: str
+  package_id: str
+  snapshot_id: Optional[str]
+  ready_for_transport: bool
+  transport_backend: str
+  risk_level: str
+  reboot_policy: str
+  repartition_allowed: bool
+  pit_fingerprint: str
+  partition_count: int
+  required_partition_count: int
+  optional_partition_count: int
+  verified_partition_count: int
+  partition_targets: Tuple[str, ...] = ()
+  partition_files: Tuple[str, ...] = ()
+  required_capabilities: Tuple[str, ...] = ()
+  advanced_requirements: Tuple[str, ...] = ()
+  suspicious_warning_count: int = 0
+  operator_warnings: Tuple[str, ...] = ()
+  requires_operator_acknowledgement: bool = False
+  blocking_reasons: Tuple[str, ...] = ()
+  recovery_guidance: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -100,6 +152,21 @@ class TransportEvidence:
   normalized_event_count: int
   progress_markers: Tuple[str, ...] = ()
   notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TranscriptEvidence:
+  """Transport-transcript retention fields carried into the reporting layer."""
+
+  policy: str
+  preserved: bool
+  summary: str
+  line_count: int
+  stdout_line_count: int = 0
+  stderr_line_count: int = 0
+  progress_marker_count: int = 0
+  note_count: int = 0
+  reference_file_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -136,8 +203,10 @@ class SessionEvidenceReport:
   host: HostEnvironmentEvidence
   device: DeviceEvidence
   package: PackageEvidence
+  flash_plan: FlashPlanEvidence
   preflight: PreflightEvidence
   transport: TransportEvidence
+  transcript: TranscriptEvidence
   outcome: OutcomeEvidence
   decision_trace: Tuple[DecisionTraceEntry, ...]
   log_lines: Tuple[str, ...]

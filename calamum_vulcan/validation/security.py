@@ -34,8 +34,26 @@ PACKAGE_FIXTURE_DIR = (
 PACKAGE_IMPORTER_PATH = (
   Path(__file__).resolve().parents[1] / 'domain' / 'package' / 'importer.py'
 )
+ANALYZED_SNAPSHOT_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'package' / 'snapshot.py'
+)
+DEVICE_REGISTRY_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'device_registry' / 'registry.py'
+)
+FLASH_PLAN_BUILDER_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'flash_plan' / 'builder.py'
+)
 IMAGE_HEURISTICS_PATH = (
   Path(__file__).resolve().parents[1] / 'domain' / 'package' / 'image_heuristics.py'
+)
+STATE_RUNTIME_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'state' / 'runtime.py'
+)
+HEIMDALL_RUNTIME_PATH = (
+  Path(__file__).resolve().parents[1] / 'adapters' / 'heimdall' / 'runtime.py'
+)
+REPORTING_MODEL_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'reporting' / 'model.py'
 )
 
 
@@ -134,9 +152,15 @@ def run_security_validation_suite(repo_root: Path) -> SecurityValidationSummary:
   checks = (
     _dangerous_python_pattern_check(repo_root),
     _companion_process_timeout_check(),
+    _heimdall_process_timeout_check(),
     _checksum_placeholder_check(),
     _package_importer_check(),
+    _analyzed_snapshot_check(),
+    _device_registry_check(),
+    _flash_plan_check(),
     _image_heuristics_check(),
+    _runtime_session_loop_check(),
+    _transcript_promotion_check(),
   )
   blocking_findings = tuple(
     detail
@@ -229,6 +253,25 @@ def _companion_process_timeout_check() -> SecurityCheckResult:
   )
 
 
+def _heimdall_process_timeout_check() -> SecurityCheckResult:
+  timeout_seconds = _module_integer_constant(
+    HEIMDALL_RUNTIME_PATH,
+    'PROCESS_TIMEOUT_SECONDS',
+  )
+  if isinstance(timeout_seconds, int) and timeout_seconds >= 1:
+    return SecurityCheckResult(
+      name='heimdall_process_timeout',
+      status='passed',
+      summary='Heimdall bounded runtime subprocesses are protected by an explicit timeout.',
+      details=('PROCESS_TIMEOUT_SECONDS={value}'.format(value=timeout_seconds),),
+    )
+  return SecurityCheckResult(
+    name='heimdall_process_timeout',
+    status='warn',
+    summary='No explicit Heimdall runtime timeout is present yet for bounded transport execution.',
+  )
+
+
 def _checksum_placeholder_check() -> SecurityCheckResult:
   findings = []  # type: List[str]
   for manifest_path in sorted(PACKAGE_FIXTURE_DIR.glob('*.json')):
@@ -271,6 +314,51 @@ def _package_importer_check() -> SecurityCheckResult:
   )
 
 
+def _analyzed_snapshot_check() -> SecurityCheckResult:
+  if ANALYZED_SNAPSHOT_PATH.exists():
+    return SecurityCheckResult(
+      name='analyzed_snapshot_integrity',
+      status='passed',
+      summary='A reviewed analyzed-snapshot surface exists for pre-execution drift checks.',
+      details=(ANALYZED_SNAPSHOT_PATH.as_posix(),),
+    )
+  return SecurityCheckResult(
+    name='analyzed_snapshot_integrity',
+    status='warn',
+    summary='No analyzed-snapshot sealing surface exists yet for pre-execution drift rejection.',
+  )
+
+
+def _device_registry_check() -> SecurityCheckResult:
+  if DEVICE_REGISTRY_PATH.exists():
+    return SecurityCheckResult(
+      name='device_registry_truth',
+      status='passed',
+      summary='A repo-owned device registry exists for product-code and guidance resolution.',
+      details=(DEVICE_REGISTRY_PATH.as_posix(),),
+    )
+  return SecurityCheckResult(
+    name='device_registry_truth',
+    status='warn',
+    summary='No repo-owned device registry exists yet for compatibility and guidance truth.',
+  )
+
+
+def _flash_plan_check() -> SecurityCheckResult:
+  if FLASH_PLAN_BUILDER_PATH.exists():
+    return SecurityCheckResult(
+      name='flash_plan_review_surface',
+      status='passed',
+      summary='A reviewed flash-plan builder exists for transport posture and recovery guidance truth.',
+      details=(FLASH_PLAN_BUILDER_PATH.as_posix(),),
+    )
+  return SecurityCheckResult(
+    name='flash_plan_review_surface',
+    status='warn',
+    summary='No reviewed flash-plan builder exists yet for transport posture and recovery guidance truth.',
+  )
+
+
 def _image_heuristics_check() -> SecurityCheckResult:
   if IMAGE_HEURISTICS_PATH.exists():
     return SecurityCheckResult(
@@ -283,6 +371,43 @@ def _image_heuristics_check() -> SecurityCheckResult:
     name='android_image_heuristics',
     status='warn',
     summary='No Android-image suspiciousness heuristics are implemented yet for rooted or tampered package traits.',
+  )
+
+
+def _runtime_session_loop_check() -> SecurityCheckResult:
+  if (
+    STATE_RUNTIME_PATH.exists()
+    and HEIMDALL_RUNTIME_PATH.exists()
+    and 'def run_bounded_heimdall_flash_session(' in HEIMDALL_RUNTIME_PATH.read_text(encoding='utf-8')
+  ):
+    return SecurityCheckResult(
+      name='runtime_session_loop',
+      status='passed',
+      summary='A bounded runtime session loop exists over the reviewed Heimdall flash seam.',
+      details=(STATE_RUNTIME_PATH.as_posix(),),
+    )
+  return SecurityCheckResult(
+    name='runtime_session_loop',
+    status='warn',
+    summary='No bounded runtime session loop exists yet over the reviewed Heimdall seam.',
+  )
+
+
+def _transcript_promotion_check() -> SecurityCheckResult:
+  if (
+    REPORTING_MODEL_PATH.exists()
+    and 'class TranscriptEvidence' in REPORTING_MODEL_PATH.read_text(encoding='utf-8')
+  ):
+    return SecurityCheckResult(
+      name='transport_transcript_promotion',
+      status='passed',
+      summary='Transport transcript promotion exists as an explicit reporting contract.',
+      details=('TranscriptEvidence',),
+    )
+  return SecurityCheckResult(
+    name='transport_transcript_promotion',
+    status='warn',
+    summary='Transport transcript promotion is still summary-only and lacks an explicit reporting contract.',
   )
 
 
@@ -343,6 +468,23 @@ def _safe_zip_destination(target_root: Path, member: zipfile.ZipInfo) -> Path:
       )
     )
   return destination
+
+
+def _module_integer_constant(file_path: Path, constant_name: str) -> int:
+  if not file_path.exists():
+    return 0
+  try:
+    tree = ast.parse(file_path.read_text(encoding='utf-8'))
+  except (OSError, UnicodeDecodeError, SyntaxError):
+    return 0
+  for node in tree.body:
+    if not isinstance(node, ast.Assign):
+      continue
+    for target in node.targets:
+      if isinstance(target, ast.Name) and target.id == constant_name:
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, int):
+          return node.value.value
+  return 0
 
 
 def _zip_info_is_symlink(member: zipfile.ZipInfo) -> bool:

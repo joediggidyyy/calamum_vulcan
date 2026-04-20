@@ -50,6 +50,10 @@ REQUIRED_CHECKSUM_FIELDS = (
   'checksum_id',
   'file_name',
   'algorithm',
+)
+
+REQUIRED_CHECKSUM_VALUE_FIELDS = (
+  'value',
   'value_placeholder',
 )
 
@@ -116,6 +120,12 @@ def validate_manifest_contract_shape(
             'checksums[{index}]'.format(index=index),
           )
         )
+        if not any(field in checksum for field in REQUIRED_CHECKSUM_VALUE_FIELDS):
+          issues.append(
+            'checksums[{index}] must include `value` or `value_placeholder`'.format(
+              index=index,
+            )
+          )
       else:
         issues.append('checksums[{index}] must be a mapping'.format(index=index))
 

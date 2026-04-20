@@ -52,6 +52,12 @@ class SecurityValidationTests(unittest.TestCase):
     self.assertNotEqual(summary.decision, 'failed')
     self.assertEqual(checks['dangerous_python_patterns'].status, 'passed')
     self.assertEqual(checks['companion_process_timeout'].status, 'passed')
+    self.assertEqual(checks['heimdall_process_timeout'].status, 'passed')
+    self.assertEqual(checks['device_registry_truth'].status, 'passed')
+    self.assertEqual(checks['flash_plan_review_surface'].status, 'passed')
+    self.assertEqual(checks['android_image_heuristics'].status, 'passed')
+    self.assertEqual(checks['runtime_session_loop'].status, 'passed')
+    self.assertEqual(checks['transport_transcript_promotion'].status, 'passed')
     self.assertIn(checks['checksum_placeholders'].status, ('warn', 'passed'))
 
 

@@ -11,6 +11,7 @@ FINAL_EXAM_ROOT = Path(__file__).resolve().parents[2]
 if str(FINAL_EXAM_ROOT) not in sys.path:
   sys.path.insert(0, str(FINAL_EXAM_ROOT))
 
+from calamum_vulcan.domain.device_registry import DeviceRegistryMatchKind
 from calamum_vulcan.domain.preflight import PreflightGate
 from calamum_vulcan.domain.preflight import PreflightInput
 from calamum_vulcan.domain.preflight import PreflightSeverity
@@ -66,6 +67,94 @@ class PreflightRuleTests(unittest.TestCase):
       any(
         signal.rule_id == 'destructive_ack'
         and signal.severity == PreflightSeverity.BLOCK
+        for signal in report.signals
+      )
+    )
+
+  def test_unknown_device_registry_blocks_review_before_package_match(self) -> None:
+    report = evaluate_preflight(
+      PreflightInput(
+        device_present=True,
+        in_download_mode=True,
+        package_selected=True,
+        package_complete=True,
+        checksums_present=True,
+        device_registry_known=False,
+        product_code='SM-UNKNOWN1',
+        package_id='regional-match-demo',
+      )
+    )
+
+    self.assertEqual(report.gate, PreflightGate.BLOCKED)
+    self.assertTrue(
+      any(
+        signal.rule_id == 'device_registry'
+        and signal.severity == PreflightSeverity.BLOCK
+        for signal in report.signals
+      )
+    )
+    self.assertFalse(
+      any(signal.rule_id == 'product_code_match' for signal in report.signals)
+    )
+
+  def test_alias_resolution_keeps_the_gate_open_when_other_rules_pass(self) -> None:
+    report = evaluate_preflight(
+      PreflightInput(
+        device_present=True,
+        in_download_mode=True,
+        package_selected=True,
+        package_complete=True,
+        checksums_present=True,
+        device_registry_known=True,
+        device_registry_match_kind=DeviceRegistryMatchKind.ALIAS,
+        product_code='g991u',
+        canonical_product_code='SM-G991U',
+        device_marketing_name='Galaxy S21',
+        product_code_match=True,
+        warnings_acknowledged=True,
+        battery_level=72,
+        package_id='regional-match-demo',
+      )
+    )
+
+    self.assertEqual(report.gate, PreflightGate.READY)
+    self.assertTrue(
+      any(
+        signal.rule_id == 'device_registry'
+        and signal.severity == PreflightSeverity.PASS
+        for signal in report.signals
+      )
+    )
+
+  def test_acknowledged_suspicious_warning_keeps_gate_ready(self) -> None:
+    report = evaluate_preflight(
+      PreflightInput(
+        device_present=True,
+        in_download_mode=True,
+        package_selected=True,
+        package_complete=True,
+        checksums_present=True,
+        device_registry_known=True,
+        product_code='SM-G991U',
+        canonical_product_code='SM-G991U',
+        device_marketing_name='Galaxy S21',
+        product_code_match=True,
+        warnings_acknowledged=True,
+        battery_level=72,
+        package_id='suspicious-review-demo',
+        suspicious_warning_count=2,
+        suspiciousness_summary='2 warning-tier suspicious Android traits detected.',
+        suspicious_indicator_ids=('test_keys', 'magisk'),
+      )
+    )
+
+    self.assertEqual(report.gate, PreflightGate.READY)
+    self.assertTrue(report.ready_for_execution)
+    self.assertGreaterEqual(report.warning_count, 1)
+    self.assertTrue(
+      any(
+        signal.rule_id == 'package_suspiciousness'
+        and signal.severity == PreflightSeverity.WARN
         for signal in report.signals
       )
     )

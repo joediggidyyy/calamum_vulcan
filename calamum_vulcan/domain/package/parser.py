@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from pathlib import Path
 from typing import Dict
 from typing import Mapping
 from typing import Optional
 from typing import Sequence
 from typing import Tuple
 
+from calamum_vulcan.domain.device_registry import resolve_package_compatibility
+
 from .contract import validate_manifest_contract_shape
+from .image_heuristics import assess_android_image_heuristics
+from .image_heuristics import summarize_suspicious_findings
 from .model import ChecksumPlaceholder
 from .model import PackageCompatibilityContract
 from .model import PackageCompatibilityExpectation
 from .model import PackageIdentity
 from .model import PackageManifestAssessment
 from .model import PackageRiskLevel
+from .model import PackageSuspiciousFinding
 from .model import PackageSummaryContract
 from .model import PartitionPlanEntry
 from .model import RebootPolicy
@@ -43,6 +50,7 @@ def parse_package_summary_contract(
   compatibility = _mapping_value(manifest, 'compatibility')
   flash_plan = _mapping_value(manifest, 'flash_plan')
   checksums = manifest.get('checksums')
+  suspicious_findings = assess_android_image_heuristics(manifest)
 
   return PackageSummaryContract(
     schema_version=str(manifest['schema_version']),
@@ -78,17 +86,13 @@ def parse_package_summary_contract(
       for entry in checksums_aware_partitions(flash_plan.get('partitions', ()))
     ),
     checksums=tuple(
-      ChecksumPlaceholder(
-        checksum_id=str(entry['checksum_id']),
-        file_name=str(entry['file_name']),
-        algorithm=str(entry['algorithm']),
-        value_placeholder=str(entry['value_placeholder']),
-      )
+      _checksum_record_from_mapping(entry)
       for entry in checksums_aware_entries(checksums)
     ),
     post_flash_instructions=_string_tuple(
       flash_plan.get('post_flash_instructions', ())
     ),
+    suspicious_findings=suspicious_findings,
   )
 
 
@@ -96,6 +100,9 @@ def assess_package_manifest(
   manifest: Mapping[str, object],
   detected_product_code: Optional[str] = None,
   fixture_name: str = 'ad_hoc_manifest',
+  source_kind: str = 'fixture',
+  staged_root: Optional[Path] = None,
+  payload_members: Sequence[str] = (),
 ) -> PackageManifestAssessment:
   """Assess one manifest for shell display and preflight integration."""
 
@@ -135,23 +142,42 @@ def assess_package_manifest(
   post_flash_instructions = _string_tuple(
     flash_plan.get('post_flash_instructions', ())
   )
-  matches_detected_product_code = _matches_detected_product_code(
+  compatibility_resolution = resolve_package_compatibility(
     supported_product_codes,
+    supported_device_names,
     detected_product_code,
-    expectation,
+    expectation.value,
     issues,
   )
+  matches_detected_product_code = compatibility_resolution.compatible
 
   if summary is not None:
     partitions = summary.partitions
     checksum_entries = summary.checksums
     post_flash_instructions = summary.post_flash_instructions
 
+  suspicious_findings = _merged_suspicious_findings(
+    manifest,
+    summary.suspicious_findings if summary is not None else (),
+    staged_root=staged_root,
+    payload_members=payload_members,
+  )
+
+  checksum_verification_complete = bool(checksum_entries) and all(
+    entry.verified for entry in checksum_entries
+  )
+  verified_checksum_count = sum(
+    1 for entry in checksum_entries if entry.verified
+  )
+
   return PackageManifestAssessment(
     fixture_name=fixture_name,
+    source_kind=source_kind,
     contract_issues=issues,
     contract_complete=summary is not None and not issues,
     checksum_coverage_present=bool(checksum_entries),
+    checksum_verification_complete=checksum_verification_complete,
+    verified_checksum_count=verified_checksum_count,
     display_package_id=_string_value(identity, 'package_id', 'unknown-package'),
     display_name=_string_value(identity, 'name', 'Unresolved package'),
     version=_string_value(identity, 'version', 'unknown'),
@@ -170,8 +196,18 @@ def assess_package_manifest(
     partitions=partitions,
     checksums=checksum_entries,
     post_flash_instructions=post_flash_instructions,
-    detected_product_code=detected_product_code,
+    suspicious_findings=suspicious_findings,
+    suspicious_warning_count=len(suspicious_findings),
+    suspiciousness_summary=summarize_suspicious_findings(suspicious_findings),
+    detected_product_code=compatibility_resolution.registry_resolution.detected_product_code,
     matches_detected_product_code=matches_detected_product_code,
+    resolved_product_code=compatibility_resolution.registry_resolution.canonical_product_code,
+    resolved_device_name=compatibility_resolution.registry_resolution.marketing_name,
+    device_registry_known=compatibility_resolution.registry_resolution.known,
+    device_registry_match_kind=compatibility_resolution.registry_resolution.match_kind,
+    device_mode_entry_instructions=compatibility_resolution.registry_resolution.mode_entry_instructions,
+    device_known_quirks=compatibility_resolution.registry_resolution.known_quirks,
+    compatibility_summary=compatibility_resolution.summary,
     summary=summary,
   )
 
@@ -182,13 +218,28 @@ def preflight_overrides_from_package_assessment(
   """Convert assessed package truth into preflight-rule overrides."""
 
   destructive_operation = assessment.risk_level == PackageRiskLevel.DESTRUCTIVE
+  checksums_present = assessment.checksum_coverage_present
+  snapshot_required = assessment.source_kind == 'archive'
+  snapshot_created = assessment.analyzed_snapshot_id is not None
+  if assessment.source_kind != 'fixture':
+    checksums_present = assessment.checksum_verification_complete
   return {
     'package_selected': True,
     'package_complete': assessment.contract_complete,
-    'checksums_present': assessment.checksum_coverage_present,
+    'checksums_present': checksums_present,
+    'snapshot_required': snapshot_required,
+    'snapshot_created': snapshot_created,
+    'snapshot_verified': assessment.analyzed_snapshot_verified,
+    'snapshot_drift_detected': assessment.analyzed_snapshot_drift_detected,
+    'snapshot_id': assessment.analyzed_snapshot_id,
     'product_code_match': assessment.matches_detected_product_code,
     'destructive_operation': destructive_operation,
     'package_id': assessment.display_package_id,
+    'suspicious_warning_count': assessment.suspicious_warning_count,
+    'suspiciousness_summary': assessment.suspiciousness_summary,
+    'suspicious_indicator_ids': tuple(
+      finding.indicator_id for finding in assessment.suspicious_findings
+    ),
   }
 
 
@@ -220,8 +271,8 @@ def checksums_aware_entries(
   for entry in checksums:
     if not isinstance(entry, Mapping):
       continue
-    required = ('checksum_id', 'file_name', 'algorithm', 'value_placeholder')
-    if all(field in entry for field in required):
+    required = ('checksum_id', 'file_name', 'algorithm')
+    if all(field in entry for field in required) and _checksum_value(entry) is not None:
       normalized.append(entry)
   return tuple(normalized)
 
@@ -244,29 +295,51 @@ def _preview_checksums(
   checksums: object,
 ) -> Tuple[ChecksumPlaceholder, ...]:
   return tuple(
-    ChecksumPlaceholder(
-      checksum_id=str(entry['checksum_id']),
-      file_name=str(entry['file_name']),
-      algorithm=str(entry['algorithm']),
-      value_placeholder=str(entry['value_placeholder']),
-    )
+    _checksum_record_from_mapping(entry)
     for entry in checksums_aware_entries(checksums)
   )
 
 
-def _matches_detected_product_code(
-  supported_product_codes: Tuple[str, ...],
-  detected_product_code: Optional[str],
-  expectation: PackageCompatibilityExpectation,
-  issues: Tuple[str, ...],
-) -> bool:
-  if issues:
-    return False
-  if expectation == PackageCompatibilityExpectation.MISMATCH:
-    return False
-  if detected_product_code is not None and supported_product_codes:
-    return detected_product_code in supported_product_codes
-  return expectation == PackageCompatibilityExpectation.MATCHED
+def with_additional_assessment_issues(
+  assessment: PackageManifestAssessment,
+  issues: Sequence[str],
+) -> PackageManifestAssessment:
+  """Return one assessment with additional contract issues folded in."""
+
+  additions = tuple(str(issue) for issue in issues if str(issue))
+  if not additions:
+    return assessment
+  merged = assessment.contract_issues + additions
+  return replace(
+    assessment,
+    contract_issues=merged,
+    contract_complete=False,
+  )
+
+
+def _merged_suspicious_findings(
+  manifest: Mapping[str, object],
+  existing_findings: Sequence[PackageSuspiciousFinding],
+  staged_root: Optional[Path],
+  payload_members: Sequence[str],
+) -> Tuple[PackageSuspiciousFinding, ...]:
+  findings = list(existing_findings)
+  if staged_root is not None:
+    findings.extend(
+      assess_android_image_heuristics(
+        manifest,
+        staged_root=staged_root,
+        payload_members=payload_members,
+      )
+    )
+  deduped = []
+  seen = set()
+  for finding in findings:
+    if finding.indicator_id in seen:
+      continue
+    seen.add(finding.indicator_id)
+    deduped.append(finding)
+  return tuple(deduped)
 
 
 def _mapping_value_or_empty(
@@ -313,3 +386,36 @@ def _enum_or_default(enum_type, value: object, default):
     return enum_type(str(value))
   except ValueError:
     return default
+
+
+def _checksum_record_from_mapping(
+  entry: Mapping[str, object],
+) -> ChecksumPlaceholder:
+  value_placeholder = ''
+  placeholder = entry.get('value_placeholder')
+  if placeholder is not None:
+    value_placeholder = str(placeholder)
+
+  resolved_value = entry.get('value')
+  source_label = _string_value(entry, 'source_label', 'manifest_placeholder')
+  if resolved_value is not None and placeholder is None:
+    source_label = _string_value(entry, 'source_label', 'manifest_value')
+
+  verified_value = entry.get('verified', False)
+  return ChecksumPlaceholder(
+    checksum_id=str(entry['checksum_id']),
+    file_name=str(entry['file_name']),
+    algorithm=str(entry['algorithm']),
+    value_placeholder=value_placeholder,
+    resolved_value=str(resolved_value) if resolved_value is not None else None,
+    verified=bool(verified_value),
+    source_label=source_label,
+  )
+
+
+def _checksum_value(entry: Mapping[str, object]) -> Optional[str]:
+  if 'value' in entry and entry.get('value') is not None:
+    return str(entry['value'])
+  if 'value_placeholder' in entry and entry.get('value_placeholder') is not None:
+    return str(entry['value_placeholder'])
+  return None

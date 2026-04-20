@@ -80,7 +80,7 @@ The publication rehearsal accepts TestPyPI credentials from the release-root `.e
 The packaging contract for `0.1.0` defines these installed entry points:
 
 - `calamum-vulcan` — console entry point for CLI review flows and GUI launch
-- `calamum-vulcan-gui` — GUI-oriented launcher entry point
+- `calamum-vulcan-gui` — console-visible GUI launcher entry point
 
 ## Repository layout
 

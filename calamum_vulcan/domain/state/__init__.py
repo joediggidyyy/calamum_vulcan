@@ -8,6 +8,8 @@ from .model import SessionPhase
 from .model import TransitionRejected
 from .reducer import apply_event
 from .reducer import replay_events
+from .runtime import RuntimeSessionRejected
+from .runtime import ensure_runtime_ready
 
 __all__ = [
   'GuardState',
@@ -16,6 +18,8 @@ __all__ = [
   'SessionEventType',
   'SessionPhase',
   'TransitionRejected',
+  'RuntimeSessionRejected',
   'apply_event',
+  'ensure_runtime_ready',
   'replay_events',
 ]

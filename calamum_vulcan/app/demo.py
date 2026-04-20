@@ -11,6 +11,8 @@ from calamum_vulcan.adapters.heimdall import HeimdallNormalizedTrace
 from calamum_vulcan.adapters.heimdall import apply_heimdall_trace
 from calamum_vulcan.adapters.heimdall import build_command_plan_for_operation
 from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
+from calamum_vulcan.adapters.heimdall import run_bounded_heimdall_flash_session
+from calamum_vulcan.domain.flash_plan import build_reviewed_flash_plan
 from calamum_vulcan.domain.package import PackageManifestAssessment
 from calamum_vulcan.domain.package import assess_package_manifest
 from calamum_vulcan.domain.state import PlatformSession
@@ -165,13 +167,22 @@ def build_demo_adapter_session(
     session=base_session,
     package_fixture_name=package_fixture_name,
   )
-  trace = build_demo_adapter_trace(
-    name,
-    package_assessment,
-    adapter_fixture_name=adapter_fixture_name,
+  fixture_name = adapter_fixture_name
+  if fixture_name == 'scenario-default':
+    fixture_name = default_adapter_fixture_for_scenario(name)
+  process_result = load_heimdall_process_fixture(fixture_name)
+
+  def _runner(command_plan: object) -> object:
+    del command_plan
+    return process_result
+
+  runtime_result = run_bounded_heimdall_flash_session(
+    base_session,
+    build_reviewed_flash_plan(package_assessment),
+    runner=_runner,
+    fixture_name=fixture_name,
   )
-  session = apply_heimdall_trace(base_session, trace)
-  return session, package_assessment, trace
+  return runtime_result.session, package_assessment, runtime_result.trace
 
 
 def available_adapter_fixtures() -> Tuple[str, ...]:

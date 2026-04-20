@@ -148,6 +148,37 @@ class AdbFastbootAdapterTests(unittest.TestCase):
     self.assertEqual(process_result.stdout_lines, ('List of devices attached',))
     self.assertIn('timed out after', process_result.stderr_lines[-1])
 
+  def test_runtime_suppresses_windows_console_window_for_live_commands(self) -> None:
+    command_plan = build_adb_detect_command_plan()
+    completed = mock.Mock(returncode=0, stdout='', stderr='')
+
+    with mock.patch.object(adb_fastboot_runtime, '_resolve_executable', return_value='adb.exe'):
+      with mock.patch.object(adb_fastboot_runtime.os, 'name', 'nt'):
+        with mock.patch.object(
+          adb_fastboot_runtime.subprocess,
+          'run',
+          return_value=completed,
+        ) as mocked_run:
+          adb_fastboot_runtime._run_process(
+            command_plan,
+            fixture_name='live-process',
+          )
+
+    kwargs = mocked_run.call_args.kwargs
+    create_no_window = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+    if create_no_window:
+      self.assertEqual(kwargs.get('creationflags'), create_no_window)
+    startupinfo_factory = getattr(subprocess, 'STARTUPINFO', None)
+    use_show_window = getattr(subprocess, 'STARTF_USESHOWWINDOW', 0)
+    hide_window = getattr(subprocess, 'SW_HIDE', 0)
+    if startupinfo_factory is not None and use_show_window:
+      startupinfo = kwargs.get('startupinfo')
+      self.assertIsNotNone(startupinfo)
+      self.assertEqual(startupinfo.wShowWindow, hide_window)
+      self.assertTrue(startupinfo.dwFlags & use_show_window)
+    else:
+      self.assertNotIn('startupinfo', kwargs)
+
 
 if __name__ == '__main__':
   unittest.main()

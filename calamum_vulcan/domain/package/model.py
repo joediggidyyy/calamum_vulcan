@@ -7,6 +7,8 @@ from enum import Enum
 from typing import Optional
 from typing import Tuple
 
+from calamum_vulcan.domain.device_registry import DeviceRegistryMatchKind
+
 
 class PackageRiskLevel(str, Enum):
   """Risk posture declared by a package manifest."""
@@ -54,12 +56,41 @@ class PackageCompatibilityContract:
 
 @dataclass(frozen=True)
 class ChecksumPlaceholder:
-  """Checksum coverage placeholder for one package payload."""
+  """Checksum coverage record for one package payload."""
 
   checksum_id: str
   file_name: str
   algorithm: str
   value_placeholder: str
+  resolved_value: Optional[str] = None
+  verified: bool = False
+  source_label: str = 'manifest_placeholder'
+
+  @property
+  def display_value(self) -> str:
+    """Return the most useful checksum value for operator-facing surfaces."""
+
+    if self.resolved_value:
+      return self.resolved_value
+    return self.value_placeholder
+
+  @property
+  def placeholder_only(self) -> bool:
+    """Return whether this checksum still relies on a placeholder surface."""
+
+    return not self.resolved_value and bool(self.value_placeholder)
+
+
+@dataclass(frozen=True)
+class PackageSuspiciousFinding:
+  """One warning-tier suspicious Android trait surfaced during package review."""
+
+  indicator_id: str
+  title: str
+  summary: str
+  operator_guidance: str
+  evidence_source: str
+  evidence_value: str
 
 
 @dataclass(frozen=True)
@@ -85,6 +116,7 @@ class PackageSummaryContract:
   partitions: Tuple[PartitionPlanEntry, ...]
   checksums: Tuple[ChecksumPlaceholder, ...]
   post_flash_instructions: Tuple[str, ...] = ()
+  suspicious_findings: Tuple[PackageSuspiciousFinding, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -92,9 +124,12 @@ class PackageManifestAssessment:
   """Normalized package manifest context, even when the contract is incomplete."""
 
   fixture_name: str
+  source_kind: str
   contract_issues: Tuple[str, ...]
   contract_complete: bool
   checksum_coverage_present: bool
+  checksum_verification_complete: bool
+  verified_checksum_count: int
   display_package_id: str
   display_name: str
   version: str
@@ -109,8 +144,23 @@ class PackageManifestAssessment:
   partitions: Tuple[PartitionPlanEntry, ...] = ()
   checksums: Tuple[ChecksumPlaceholder, ...] = ()
   post_flash_instructions: Tuple[str, ...] = ()
+  suspicious_findings: Tuple[PackageSuspiciousFinding, ...] = ()
+  suspicious_warning_count: int = 0
+  suspiciousness_summary: str = 'No suspicious Android traits detected.'
   detected_product_code: Optional[str] = None
   matches_detected_product_code: bool = False
+  resolved_product_code: Optional[str] = None
+  resolved_device_name: Optional[str] = None
+  device_registry_known: bool = False
+  device_registry_match_kind: DeviceRegistryMatchKind = DeviceRegistryMatchKind.NOT_PROVIDED
+  device_mode_entry_instructions: Tuple[str, ...] = ()
+  device_known_quirks: Tuple[str, ...] = ()
+  compatibility_summary: str = 'Compatibility unresolved.'
+  analyzed_snapshot_id: Optional[str] = None
+  analyzed_snapshot_created_at_utc: Optional[str] = None
+  analyzed_snapshot_verified: bool = False
+  analyzed_snapshot_drift_detected: bool = False
+  snapshot_issues: Tuple[str, ...] = ()
   summary: Optional[PackageSummaryContract] = None
 
 

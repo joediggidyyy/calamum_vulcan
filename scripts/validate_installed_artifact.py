@@ -9,6 +9,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Sequence
+import zipfile
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -78,12 +79,17 @@ file_names = sorted(str(file) for file in dist.files or ())
 required = [
   'calamum_vulcan/__init__.py',
   'calamum_vulcan/app/__main__.py',
+  'calamum_vulcan/app/qt_compat.py',
+  'calamum_vulcan/domain/flash_plan/__init__.py',
+  'calamum_vulcan/domain/package/image_heuristics.py',
+  'calamum_vulcan/domain/state/runtime.py',
   'calamum_vulcan/launch_shell.py',
   'calamum_vulcan/assets/branding/calamum_logo_color.png',
   'calamum_vulcan/assets/branding/calamum_taskbar_icon.png',
   'calamum_vulcan/fixtures/package_manifests/matched_recovery_package.json',
   'calamum_vulcan/fixtures/package_manifests/mismatched_recovery_package.json',
   'calamum_vulcan/fixtures/package_manifests/incomplete_recovery_package.json',
+  'calamum_vulcan/fixtures/package_manifests/suspicious_review_package.json',
   'calamum_vulcan-0.1.0.dist-info/METADATA',
   'calamum_vulcan-0.1.0.dist-info/entry_points.txt',
 ]
@@ -105,6 +111,7 @@ expected_fixtures = [
   'mismatched_recovery_package.json',
   'package_first_standard_review_package.json',
   'ready_standard_review_package.json',
+  'suspicious_review_package.json',
 ]
 if fixture_names != expected_fixtures:
   raise SystemExit('Installed fixture set mismatch: ' + ', '.join(fixture_names))
@@ -159,6 +166,33 @@ def _read_json(path: Path) -> object:
   return json.loads(path.read_text(encoding='utf-8'))
 
 
+def _write_sample_package_archive(output_path: Path) -> Path:
+  manifest_path = (
+    REPO_ROOT
+    / 'calamum_vulcan'
+    / 'fixtures'
+    / 'package_manifests'
+    / 'ready_standard_review_package.json'
+  )
+  manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+  output_path.parent.mkdir(parents=True, exist_ok=True)
+  payload_names = sorted(
+    {
+      str(entry['file_name'])
+      for entry in manifest.get('checksums', ())
+      if isinstance(entry, dict) and 'file_name' in entry
+    }
+  )
+  with zipfile.ZipFile(output_path, 'w') as archive:
+    archive.writestr('package_manifest.json', json.dumps(manifest))
+    for payload_name in payload_names:
+      archive.writestr(
+        payload_name,
+        ('calamum-vulcan-installed-artifact-review:' + payload_name).encode('utf-8'),
+      )
+  return output_path
+
+
 def main() -> int:
   wheel_path = _find_single_wheel()
 
@@ -195,7 +229,12 @@ def main() -> int:
     cwd=work_dir,
   )
   help_text = help_result.stdout
-  for expected_flag in ('--integration-suite', '--export-evidence', '--package-fixture'):
+  for expected_flag in (
+    '--integration-suite',
+    '--export-evidence',
+    '--package-fixture',
+    '--package-archive',
+  ):
     if expected_flag not in help_text:
       raise SystemExit('Help output is missing expected flag: {flag}'.format(flag=expected_flag))
 
@@ -223,6 +262,49 @@ def main() -> int:
   if 'phase="Ready to Execute" gate="Gate Ready"' not in gui_result.stdout:
     raise SystemExit('Installed GUI entry point did not preserve the expected shell summary.')
 
+  package_archive_path = _write_sample_package_archive(
+    output_dir / 'matched_recovery_package.zip'
+  )
+  imported_evidence_path = output_dir / 'archive_evidence.json'
+  imported_result = _run(
+    [
+      sys.executable,
+      '-c', _cli_probe_code(install_root),
+      '--scenario', 'ready',
+      '--package-archive', str(package_archive_path),
+      '--describe-only',
+      '--export-evidence',
+      '--evidence-format', 'json',
+      '--evidence-output', str(imported_evidence_path),
+    ],
+    cwd=work_dir,
+  )
+  if 'phase="Ready to Execute" gate="Gate Ready"' not in imported_result.stdout:
+    raise SystemExit('Installed archive-backed review did not preserve the ready shell summary.')
+  imported_payload = _read_json(imported_evidence_path)
+  if imported_payload['package']['source_kind'] != 'archive':
+    raise SystemExit('Installed archive-backed evidence lost the archive source label.')
+  if imported_payload['package']['checksum_verification_complete'] is not True:
+    raise SystemExit('Installed archive-backed evidence did not preserve checksum verification state.')
+  if not imported_payload['package']['snapshot_id']:
+    raise SystemExit('Installed archive-backed evidence did not preserve analyzed snapshot identity.')
+  if imported_payload['package']['snapshot_verified'] is not True:
+    raise SystemExit('Installed archive-backed evidence did not preserve analyzed snapshot verification state.')
+  if not imported_payload['flash_plan']['plan_id']:
+    raise SystemExit('Installed archive-backed evidence did not preserve reviewed flash-plan identity.')
+  if imported_payload['flash_plan']['ready_for_transport'] is not True:
+    raise SystemExit('Installed archive-backed evidence did not preserve reviewed flash-plan readiness state.')
+  if imported_payload['flash_plan']['reboot_policy'] != 'standard':
+    raise SystemExit('Installed archive-backed evidence did not preserve reviewed flash-plan reboot posture.')
+  if 'RECOVERY' not in imported_payload['flash_plan']['partition_targets']:
+    raise SystemExit('Installed archive-backed evidence did not preserve reviewed flash-plan partition targets.')
+  if not imported_payload['flash_plan']['recovery_guidance']:
+    raise SystemExit('Installed archive-backed evidence did not preserve reviewed flash-plan recovery guidance.')
+  if imported_payload['device']['marketing_name'] != 'Galaxy S21':
+    raise SystemExit('Installed archive-backed evidence did not preserve device-registry marketing-name resolution.')
+  if imported_payload['device']['registry_match_kind'] != 'exact':
+    raise SystemExit('Installed archive-backed evidence did not preserve device-registry resolution state.')
+
   evidence_path = output_dir / 'blocked_evidence.json'
   _run(
     [
@@ -239,6 +321,61 @@ def main() -> int:
   evidence_payload = _read_json(evidence_path)
   if evidence_payload['preflight']['gate'] != 'blocked':
     raise SystemExit('Installed evidence export lost the blocked preflight gate.')
+  if evidence_payload['flash_plan']['ready_for_transport'] is not False:
+    raise SystemExit('Installed blocked evidence did not preserve the reviewed flash-plan blocked posture.')
+
+  suspicious_evidence_path = output_dir / 'suspicious_review_evidence.json'
+  suspicious_result = _run(
+    [
+      sys.executable,
+      '-c', _cli_probe_code(install_root),
+      '--scenario', 'ready',
+      '--package-fixture', 'suspicious-review',
+      '--describe-only',
+      '--export-evidence',
+      '--evidence-format', 'json',
+      '--evidence-output', str(suspicious_evidence_path),
+    ],
+    cwd=work_dir,
+  )
+  if 'phase="Ready to Execute" gate="Gate Ready"' not in suspicious_result.stdout:
+    raise SystemExit('Installed suspicious-review fixture did not preserve the ready execution surface after acknowledgement.')
+  suspicious_payload = _read_json(suspicious_evidence_path)
+  if suspicious_payload['package']['suspicious_warning_count'] < 1:
+    raise SystemExit('Installed suspicious-review evidence did not preserve package suspicious-warning counts.')
+  if 'test_keys' not in suspicious_payload['package']['suspicious_indicator_ids']:
+    raise SystemExit('Installed suspicious-review evidence did not preserve canonical suspicious indicator ids.')
+  if suspicious_payload['flash_plan']['suspicious_warning_count'] < 1:
+    raise SystemExit('Installed suspicious-review evidence did not preserve flash-plan warning counts.')
+  if not suspicious_payload['flash_plan']['operator_warnings']:
+    raise SystemExit('Installed suspicious-review evidence did not preserve flash-plan warning summaries.')
+
+  failure_evidence_path = output_dir / 'failure_runtime_evidence.json'
+  _run(
+    [
+      sys.executable,
+      '-c', _cli_probe_code(install_root),
+      '--scenario', 'failure',
+      '--transport-source', 'heimdall-adapter',
+      '--describe-only',
+      '--export-evidence',
+      '--evidence-format', 'json',
+      '--evidence-output', str(failure_evidence_path),
+    ],
+    cwd=work_dir,
+  )
+  failure_payload = _read_json(failure_evidence_path)
+  transcript_name = failure_payload['transcript']['reference_file_name']
+  if failure_payload['transcript']['preserved'] is not True:
+    raise SystemExit('Installed failure evidence did not preserve runtime transcript metadata.')
+  if not transcript_name:
+    raise SystemExit('Installed failure evidence did not preserve a runtime transcript reference.')
+  transcript_path = output_dir / transcript_name
+  if not transcript_path.exists():
+    raise SystemExit('Installed failure evidence did not write the bounded runtime transcript artifact.')
+  transcript_text = transcript_path.read_text(encoding='utf-8')
+  if 'USB transfer timeout during partition write' not in transcript_text:
+    raise SystemExit('Installed runtime transcript artifact lost the normalized failure reason.')
 
   bundle_path = output_dir / 'sprint_close_bundle.json'
   _run(
@@ -256,6 +393,29 @@ def main() -> int:
     raise SystemExit('Installed integration bundle lost the expected suite name.')
   if len(bundle_payload['scenarios']) != 6:
     raise SystemExit('Installed integration bundle returned the wrong scenario count.')
+
+  orchestration_bundle_path = output_dir / 'orchestration_close_bundle.json'
+  _run(
+    [
+      sys.executable,
+      '-c', _cli_probe_code(install_root),
+      '--integration-suite', 'orchestration-close',
+      '--suite-format', 'json',
+      '--suite-output', str(orchestration_bundle_path),
+    ],
+    cwd=work_dir,
+  )
+  orchestration_bundle = _read_json(orchestration_bundle_path)
+  if orchestration_bundle['suite_name'] != 'orchestration-close':
+    raise SystemExit('Installed orchestration-close bundle lost the expected suite name.')
+  runtime_scenarios = [
+    scenario for scenario in orchestration_bundle['scenarios']
+    if scenario['transport_source'] == 'heimdall-adapter'
+  ]
+  if not runtime_scenarios or not all(
+    scenario['transcript_preserved'] for scenario in runtime_scenarios
+  ):
+    raise SystemExit('Installed orchestration-close bundle did not preserve transcript references for runtime scenarios.')
   security_summary = run_security_validation_suite(REPO_ROOT)
   write_security_validation_artifacts(
     VALIDATION_ROOT / 'security_validation',
@@ -276,6 +436,8 @@ def main() -> int:
       'entrypoint_help="passed"',
       'entrypoint_describe="passed"',
       'gui_entrypoint="passed"',
+      'archive_package_review="passed"',
+      'suspicious_review="passed"',
       'evidence_export="passed"',
       'integration_bundle="passed"',
       'distribution_files="passed"',

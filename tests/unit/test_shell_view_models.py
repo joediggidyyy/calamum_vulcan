@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import sys
 from pathlib import Path
 import unittest
@@ -18,6 +19,7 @@ from calamum_vulcan.app.demo import build_demo_package_assessment
 from calamum_vulcan.app.demo import build_demo_session
 from calamum_vulcan.app.demo import scenario_label
 from calamum_vulcan.app.view_models import PANEL_TITLES
+from calamum_vulcan.app.view_models import LiveCompanionDeviceViewModel
 from calamum_vulcan.app.view_models import build_shell_view_model
 from calamum_vulcan.app.view_models import describe_shell
 from calamum_vulcan.domain.preflight import PreflightGate
@@ -55,7 +57,13 @@ class ShellViewModelTests(unittest.TestCase):
     self.assertEqual(model.phase_label, 'Validation Blocked')
     self.assertEqual(model.gate_label, 'Gate Blocked')
     self.assertTrue(
-      any('Product code mismatch' in line for line in model.panels[1].detail_lines)
+      any(
+        'Package compatibility does not include Galaxy S21 (SM-G991U).' in line
+        for line in model.panels[1].detail_lines
+      )
+    )
+    self.assertTrue(
+      any('Galaxy S21' in line for line in model.panels[0].detail_lines)
     )
     self.assertTrue(
       any('SM-G996U' in line for line in model.panels[2].detail_lines)
@@ -76,6 +84,70 @@ class ShellViewModelTests(unittest.TestCase):
     self.assertEqual(model.gate_label, 'Gate Blocked')
     self.assertFalse(model.control_actions[5].enabled)
     self.assertIn('No-device control deck', describe_shell(model))
+
+  def test_boot_unhydrated_shell_starts_in_standby_with_blank_fields(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name='Operational startup shell',
+      package_assessment=None,
+      boot_unhydrated=True,
+    )
+
+    pill_map = {pill.label: pill.value for pill in model.status_pills}
+    package_metrics = {metric.label: metric.value for metric in model.panels[2].metrics}
+
+    self.assertEqual(model.phase_label, 'No Device')
+    self.assertEqual(model.gate_label, 'Standby')
+    self.assertEqual(pill_map['Device'], '--')
+    self.assertEqual(pill_map['Package'], '--')
+    self.assertEqual(pill_map['Risk'], '--')
+    self.assertIn('intentionally blank at boot', model.panels[0].summary)
+    self.assertIn('stay blank at boot', model.panels[2].summary)
+    self.assertEqual(package_metrics['Loaded'], '--')
+    self.assertEqual(package_metrics['Compatibility'], '--')
+
+  def test_device_surface_cleared_blanks_only_live_device_surfaces(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    model = build_shell_view_model(
+      session,
+      scenario_name='Device cleared after disconnect',
+      package_assessment=package_assessment,
+      device_surface_cleared=True,
+    )
+
+    pill_map = {pill.label: pill.value for pill in model.status_pills}
+    package_metrics = {metric.label: metric.value for metric in model.panels[2].metrics}
+
+    self.assertEqual(pill_map['Device'], '--')
+    self.assertEqual(pill_map['Package'], package_assessment.display_package_id)
+    self.assertIn('No live device is currently detected.', model.panels[0].summary)
+    self.assertEqual(package_metrics['Loaded'], 'yes')
+
+  def test_live_adb_overlay_keeps_review_phase_but_marks_device_pill_ready(self) -> None:
+    session = build_demo_session('no-device')
+    live_device = LiveCompanionDeviceViewModel(
+      backend='adb',
+      serial='R58N12345AB',
+      state='device',
+      transport='usb',
+      product_code='SM_A037U',
+      model_name='SM_A037U',
+      device_name='a03su',
+    )
+    model = build_shell_view_model(
+      session,
+      scenario_name='Live ADB overlay',
+      live_device=live_device,
+    )
+
+    pill_map = {pill.label: pill for pill in model.status_pills}
+
+    self.assertEqual(model.phase_label, 'No Device')
+    self.assertEqual(pill_map['Device'].value, 'SM_A037U via ADB')
+    self.assertEqual(pill_map['Device'].tone, 'success')
+    self.assertIn('reviewed session remains No Device', model.panels[0].summary)
 
   def test_ready_destructive_session_enables_separated_execute_action(self) -> None:
     session = replay_events(happy_path_events()[:-2])
@@ -99,10 +171,22 @@ class ShellViewModelTests(unittest.TestCase):
       any('RECOVERY <- recovery.img' in line for line in model.panels[2].detail_lines)
     )
     self.assertTrue(
+      any('Flash plan id:' in line for line in model.panels[2].detail_lines)
+    )
+    self.assertTrue(
+      any('Recovery plan:' in line for line in model.panels[2].detail_lines)
+    )
+    self.assertTrue(
       any('Report id:' in line for line in model.panels[4].detail_lines)
     )
     self.assertTrue(
+      any('Flash plan posture:' in line for line in model.panels[4].detail_lines)
+    )
+    self.assertTrue(
       any('Export targets:' in line for line in model.panels[4].detail_lines)
+    )
+    self.assertTrue(
+      any('Galaxy S10' in line for line in model.panels[2].detail_lines)
     )
 
   def test_warning_gate_keeps_execute_action_disabled(self) -> None:
@@ -135,7 +219,10 @@ class ShellViewModelTests(unittest.TestCase):
     self.assertEqual(model.gate_label, 'Gate Warning')
     self.assertFalse(model.control_actions[3].enabled)
     self.assertTrue(
-      any('Battery guidance warning' in line for line in model.panels[1].detail_lines)
+      any(
+        'Battery level is low enough to justify operator caution.' in line
+        for line in model.panels[1].detail_lines
+      )
     )
     self.assertTrue(model.control_actions[5].enabled)
 
@@ -194,6 +281,9 @@ class ShellViewModelTests(unittest.TestCase):
       any('Contract issue:' in line for line in model.panels[2].detail_lines)
     )
     self.assertTrue(
+      any('Flash plan blocker:' in line for line in model.panels[2].detail_lines)
+    )
+    self.assertTrue(
       any('Recovery guidance:' in line for line in model.panels[4].detail_lines)
     )
 
@@ -214,6 +304,49 @@ class ShellViewModelTests(unittest.TestCase):
       any('[TRANSPORT] flash_package state=failed exit=1' in line for line in model.log_lines)
     )
     self.assertTrue(model.control_actions[5].enabled)
+
+  def test_alias_product_code_is_resolved_in_the_device_panel(self) -> None:
+    session = replace(build_demo_session('ready'), product_code='g991u')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    model = build_shell_view_model(
+      session,
+      scenario_name='Alias registry review',
+      package_assessment=package_assessment,
+    )
+
+    self.assertEqual(model.gate_label, 'Gate Ready')
+    self.assertTrue(
+      any('Registry match: alias' in line for line in model.panels[0].detail_lines)
+    )
+    self.assertTrue(
+      any('SM-G991U' in line or 'Galaxy S21' in line for line in model.panels[0].detail_lines)
+    )
+
+  def test_suspicious_review_surfaces_warning_details_without_hard_block(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment(
+      'ready',
+      session=session,
+      package_fixture_name='suspicious-review',
+    )
+    model = build_shell_view_model(
+      session,
+      scenario_name='Suspicious review lane',
+      package_assessment=package_assessment,
+    )
+
+    self.assertEqual(model.gate_label, 'Gate Ready')
+    self.assertEqual(model.panels[2].tone, 'warning')
+    self.assertTrue(model.control_actions[3].enabled)
+    self.assertTrue(
+      any('Suspicious trait:' in line for line in model.panels[2].detail_lines)
+    )
+    self.assertTrue(
+      any('Suspicious traits:' in line for line in model.panels[4].detail_lines)
+    )
+    self.assertTrue(
+      any('Flash plan warning:' in line for line in model.panels[4].detail_lines)
+    )
 
 
 if __name__ == '__main__':

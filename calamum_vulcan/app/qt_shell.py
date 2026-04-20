@@ -29,12 +29,17 @@ from .style import WINDOW_STYLE
 from .style import action_button_style
 from .style import brand_frame_style
 from .style import control_hint_style
+from .style import detail_key_style
+from .style import detail_row_style
+from .style import detail_value_style
 from .style import metric_style
 from .style import mono_terminal_style
 from .style import panel_style
 from .style import pill_style
+from .view_models import LiveCompanionDeviceViewModel
 from .view_models import PanelViewModel
 from .view_models import ShellViewModel
+from .view_models import build_shell_view_model
 
 
 if not QT_AVAILABLE:
@@ -212,6 +217,31 @@ else:
     return icon
 
 
+  def _action_object_name(label: str) -> str:
+    """Return a stable object name for one control-deck action button."""
+
+    return 'control-action-' + label.lower().replace(' ', '-')
+
+
+  class _CompanionCommandWorker(QtCore.QObject):
+    """Background worker that runs one live companion command off the UI thread."""
+
+    finished = QtCore.Signal(object, object)
+
+    def __init__(self, command_plan: AndroidToolsCommandPlan) -> None:
+      super().__init__()
+      self._command_plan = command_plan
+
+    @QtCore.Slot()
+    def run(self) -> None:
+      try:
+        trace = execute_android_tools_command(self._command_plan)
+      except Exception as error:  # pragma: no cover - defensive runtime bridge
+        self.finished.emit(None, str(error))
+        return
+      self.finished.emit(trace, None)
+
+
   class BrandMark(QtWidgets.QFrame):
     """Header branding surface with icon and wordmark."""
 
@@ -301,14 +331,71 @@ else:
       )
       value_widget = QtWidgets.QLabel(value)
       value_widget.setWordWrap(True)
+      value_widget.setAlignment(
+        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+      )
+      value_widget.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Expanding,
+        QtWidgets.QSizePolicy.Policy.Expanding,
+      )
+      value_widget.setMinimumHeight(_scaled(scale, 28))
       value_widget.setStyleSheet(
         'font-size: {size}px; font-weight: 800; line-height: 1.2;'.format(
-          size=_scaled(scale, 17),
+          size=_scaled(scale, 15),
         )
       )
-      self.setMinimumHeight(_scaled(scale, 72))
+      self.setMinimumHeight(_scaled(scale, 88))
       layout.addWidget(label_widget)
       layout.addWidget(value_widget)
+
+
+  class DetailRow(QtWidgets.QFrame):
+    """Structured detail row used inside dashboard panels."""
+
+    def __init__(self, detail: str, scale: float) -> None:
+      super().__init__()
+      self.setObjectName('panel-detail-row')
+      self.setStyleSheet(
+        detail_row_style(selector='panel-detail-row', scale=scale)
+      )
+      layout = QtWidgets.QGridLayout(self)
+      layout.setContentsMargins(
+        _scaled(scale, 10),
+        _scaled(scale, 8),
+        _scaled(scale, 10),
+        _scaled(scale, 8),
+      )
+      layout.setHorizontalSpacing(_scaled(scale, 12))
+      layout.setVerticalSpacing(_scaled(scale, 4))
+
+      key_text, value_text = self._split_detail(detail)
+      key_widget = QtWidgets.QLabel(key_text.upper())
+      key_widget.setAlignment(
+        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+      )
+      key_widget.setStyleSheet(detail_key_style(scale))
+      key_widget.setMinimumWidth(_scaled(scale, 170))
+
+      value_widget = QtWidgets.QLabel(value_text)
+      value_widget.setWordWrap(True)
+      value_widget.setAlignment(
+        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+      )
+      value_widget.setStyleSheet(detail_value_style(scale))
+
+      layout.addWidget(key_widget, 0, 0)
+      layout.addWidget(value_widget, 0, 1)
+      layout.setColumnStretch(1, 1)
+
+    @staticmethod
+    def _split_detail(detail: str) -> Tuple[str, str]:
+      if ' — ' in detail:
+        key, value = detail.split(' — ', 1)
+        return key, value
+      if ': ' in detail:
+        key, value = detail.split(': ', 1)
+        return key, value
+      return 'Note', detail
 
 
   class StatusPill(QtWidgets.QFrame):
@@ -378,7 +465,7 @@ else:
       summary.setWordWrap(True)
       summary.setStyleSheet(
         'font-size: {size}px; font-weight: 700; line-height: 1.3;'.format(
-          size=_scaled(scale, 18),
+          size=_scaled(scale, 17),
         )
       )
 
@@ -400,15 +487,7 @@ else:
         layout.addSpacing(_scaled(scale, 4))
 
       for detail in model.detail_lines:
-        detail_widget = QtWidgets.QLabel('• ' + detail)
-        detail_widget.setWordWrap(True)
-        detail_widget.setStyleSheet(
-          'color: {text}; font-size: {size}px; font-weight: 600; line-height: 1.36;'.format(
-            text=COLOR_TOKENS['text'],
-            size=_scaled(scale, 16),
-          )
-        )
-        layout.addWidget(detail_widget)
+        layout.addWidget(DetailRow(detail, scale))
 
       layout.addStretch(1)
 
@@ -423,13 +502,19 @@ else:
       self._zoom_shortcuts = []
       self._panel_titles = tuple(panel.title for panel in model.panels)
       self._action_labels = tuple(action.label for action in model.control_actions)
+      self._base_session = model.session
+      self._base_package_assessment = model.package_assessment
+      self._base_transport_trace = model.transport_trace
+      self._live_dashboard_device = model.live_device
+      self._boot_unhydrated = model.boot_unhydrated
+      self._device_surface_cleared = model.device_surface_cleared
       self._live_log_lines = list(model.log_lines)
-      self._live_status_text = 'Awaiting live ADB probe.'
+      self._live_status_text = 'Standby. No live device probe has run since startup.'
       self._live_status_tone = 'neutral'
       self._live_adb_serial = None
       self._live_fastboot_serial = None
-      self._live_adb_identity = 'ADB selected serial: awaiting live probe.'
-      self._live_fastboot_identity = 'Fastboot selected serial: awaiting probe.'
+      self._live_adb_identity = 'ADB: --'
+      self._live_fastboot_identity = 'Fastboot: --'
       self._terminal = None
       self._live_status_label = None
       self._live_adb_serial_label = None
@@ -438,6 +523,14 @@ else:
       self._live_fastboot_mode_combo = None
       self._live_adb_reboot_button = None
       self._live_fastboot_reboot_button = None
+      self._live_adb_detect_button = None
+      self._live_fastboot_detect_button = None
+      self._control_action_buttons = {}
+      self._live_command_thread = None
+      self._live_command_worker = None
+      self._live_command_in_progress = False
+      self._live_completion_handler = None
+      self._wait_cursor_active = False
       self.setWindowTitle('Calamum Vulcan — {phase}'.format(phase=model.phase_label))
       self.resize(1680, 1040)
       self.setMinimumSize(1080, 720)
@@ -445,7 +538,6 @@ else:
       self.setWindowIcon(create_app_icon())
       self._install_zoom_shortcuts()
       self._build()
-      QtCore.QTimer.singleShot(0, self._probe_live_adb_devices)
 
     def panel_titles(self) -> Tuple[str, ...]:
       """Return panel titles for validation and sandbox review."""
@@ -461,6 +553,32 @@ else:
       """Return the current live companion status text."""
 
       return self._live_status_text
+
+    def phase_label(self) -> str:
+      """Return the current reviewed session phase label."""
+
+      return self._model.phase_label
+
+    def status_pill_values(self) -> Tuple[Tuple[str, str], ...]:
+      """Return the current header pill label/value pairs."""
+
+      return tuple((pill.label, pill.value) for pill in self._model.status_pills)
+
+    def panel_summary(self, title: str) -> str:
+      """Return the summary text for one named dashboard panel."""
+
+      for panel in self._model.panels:
+        if panel.title == title:
+          return panel.summary
+      raise KeyError('Unknown panel title: {title}'.format(title=title))
+
+    def panel_detail_lines(self, title: str) -> Tuple[str, ...]:
+      """Return the detail lines for one named dashboard panel."""
+
+      for panel in self._model.panels:
+        if panel.title == title:
+          return panel.detail_lines
+      raise KeyError('Unknown panel title: {title}'.format(title=title))
 
     def live_adb_reboot_targets(self) -> Tuple[str, ...]:
       """Return the available ADB reboot targets surfaced in the shell."""
@@ -577,9 +695,9 @@ else:
       panels = [DashboardPanel(panel, self._ui_scale) for panel in self._model.panels]
       grid.addWidget(panels[0], 0, 0)
       grid.addWidget(panels[1], 0, 1)
-      grid.addWidget(panels[2], 1, 0)
-      grid.addWidget(panels[3], 1, 1)
-      grid.addWidget(panels[4], 2, 0, 1, 2)
+      grid.addWidget(panels[2], 1, 0, 1, 2)
+      grid.addWidget(panels[3], 2, 0)
+      grid.addWidget(panels[4], 2, 1)
       grid.setColumnStretch(0, 1)
       grid.setColumnStretch(1, 1)
       return grid
@@ -617,26 +735,42 @@ else:
       title.setStyleSheet(
         'font-size: {size}px; font-weight: 900;'.format(size=self._scaled(25))
       )
+      deck_note = QtWidgets.QLabel(
+        'Detect device finds the live companion. Other deck buttons report status only.'
+      )
+      deck_note.setWordWrap(True)
+      deck_note.setStyleSheet(control_hint_style(self._ui_scale))
       layout.addWidget(eyebrow)
       layout.addWidget(title)
+      layout.addWidget(deck_note)
 
       for action in self._model.control_actions:
         hint_text = action.hint
+        button_emphasis = action.emphasis
         button = QtWidgets.QPushButton(action.label)
-        button.setEnabled(action.enabled)
-        button.setStyleSheet(
-          action_button_style(action.emphasis, action.enabled, self._ui_scale)
-        )
+        button.setObjectName(_action_object_name(action.label))
+        button.setProperty('shell_base_enabled', action.enabled)
         if action.label == 'Detect device':
           hint_text = (
-            'Run the live ADB companion probe now; use the fastboot probe below '
-            'after a bootloader handoff.'
+            'Auto-detect the active live companion through ADB first, then '
+            'fastboot if needed.'
           )
-          button.setToolTip(hint_text)
-          button.clicked.connect(self._probe_live_adb_devices)
+          button.clicked.connect(self._probe_live_device)
         else:
-          button.setToolTip(action.hint)
+          button_emphasis = 'normal'
+          hint_text = self._placeholder_action_hint(action.label, action.hint)
+          button.clicked.connect(
+            lambda _checked=False, action_label=action.label, action_hint=hint_text: (
+              self._handle_placeholder_action(action_label, action_hint)
+            )
+          )
+        button.setProperty('shell_button_emphasis', button_emphasis)
+        button.setEnabled(action.enabled)
+        button.setStyleSheet(
+          action_button_style(button_emphasis, action.enabled, self._ui_scale)
+        )
         layout.addWidget(button)
+        self._control_action_buttons[action.label] = button
 
         hint = QtWidgets.QLabel(hint_text)
         hint.setWordWrap(True)
@@ -653,8 +787,7 @@ else:
         )
       )
       companion_summary = QtWidgets.QLabel(
-        'ADB and fastboot controls are live here. Samsung download-mode reboot '
-        'stays confirmation-gated and vendor-specific.'
+        'Detect device checks ADB, then fastboot. Reboot unlocks after detection.'
       )
       companion_summary.setWordWrap(True)
       companion_summary.setStyleSheet(control_hint_style(self._ui_scale))
@@ -677,26 +810,6 @@ else:
       self._live_fastboot_serial_label.setWordWrap(True)
       self._live_fastboot_serial_label.setStyleSheet(control_hint_style(self._ui_scale))
       layout.addWidget(self._live_fastboot_serial_label)
-
-      detect_row = QtWidgets.QHBoxLayout()
-      detect_row.setSpacing(self._scaled(8))
-
-      adb_detect_button = QtWidgets.QPushButton('Detect via ADB')
-      adb_detect_button.setObjectName('live-adb-detect')
-      adb_detect_button.setStyleSheet(
-        action_button_style('primary', True, self._ui_scale)
-      )
-      adb_detect_button.clicked.connect(self._probe_live_adb_devices)
-      detect_row.addWidget(adb_detect_button)
-
-      fastboot_detect_button = QtWidgets.QPushButton('Detect via Fastboot')
-      fastboot_detect_button.setObjectName('live-fastboot-detect')
-      fastboot_detect_button.setStyleSheet(
-        action_button_style('normal', True, self._ui_scale)
-      )
-      fastboot_detect_button.clicked.connect(self._probe_live_fastboot_devices)
-      detect_row.addWidget(fastboot_detect_button)
-      layout.addLayout(detect_row)
 
       adb_target_label = QtWidgets.QLabel('ADB reboot target')
       adb_target_label.setStyleSheet(control_hint_style(self._ui_scale))
@@ -802,18 +915,46 @@ else:
       if self._live_status_label is not None:
         self._live_status_label.setText(self._live_status_text)
         self._live_status_label.setStyleSheet(self._live_status_style())
+      for button in self._control_action_buttons.values():
+        base_enabled = bool(button.property('shell_base_enabled'))
+        emphasis = str(button.property('shell_button_emphasis') or 'normal')
+        enabled = base_enabled and not self._live_command_in_progress
+        button.setEnabled(enabled)
+        button.setStyleSheet(
+          action_button_style(emphasis, enabled, self._ui_scale)
+        )
       if self._live_adb_serial_label is not None:
         self._live_adb_serial_label.setText(self._live_adb_identity)
       if self._live_fastboot_serial_label is not None:
         self._live_fastboot_serial_label.setText(self._live_fastboot_identity)
+      if self._live_adb_detect_button is not None:
+        detect_enabled = not self._live_command_in_progress
+        self._live_adb_detect_button.setEnabled(detect_enabled)
+        self._live_adb_detect_button.setStyleSheet(
+          action_button_style('primary', detect_enabled, self._ui_scale)
+        )
+      if self._live_fastboot_detect_button is not None:
+        detect_enabled = not self._live_command_in_progress
+        self._live_fastboot_detect_button.setEnabled(detect_enabled)
+        self._live_fastboot_detect_button.setStyleSheet(
+          action_button_style('normal', detect_enabled, self._ui_scale)
+        )
+      if self._live_adb_mode_combo is not None:
+        self._live_adb_mode_combo.setEnabled(not self._live_command_in_progress)
+      if self._live_fastboot_mode_combo is not None:
+        self._live_fastboot_mode_combo.setEnabled(not self._live_command_in_progress)
       if self._live_adb_reboot_button is not None:
-        adb_enabled = self._live_adb_serial is not None
+        adb_enabled = (
+          self._live_adb_serial is not None and not self._live_command_in_progress
+        )
         self._live_adb_reboot_button.setEnabled(adb_enabled)
         self._live_adb_reboot_button.setStyleSheet(
           action_button_style(self._adb_reboot_emphasis(), adb_enabled, self._ui_scale)
         )
       if self._live_fastboot_reboot_button is not None:
-        fastboot_enabled = self._live_fastboot_serial is not None
+        fastboot_enabled = (
+          self._live_fastboot_serial is not None and not self._live_command_in_progress
+        )
         self._live_fastboot_reboot_button.setEnabled(fastboot_enabled)
         self._live_fastboot_reboot_button.setStyleSheet(
           action_button_style(
@@ -851,6 +992,20 @@ else:
       self._live_status_tone = tone
       self._refresh_live_controls()
 
+    def _set_live_busy(self, busy: bool) -> None:
+      """Apply busy-state feedback for live companion work."""
+
+      self._live_command_in_progress = busy
+      application = QtWidgets.QApplication.instance()
+      if application is not None:
+        if busy and not self._wait_cursor_active:
+          application.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+          self._wait_cursor_active = True
+        elif not busy and self._wait_cursor_active:
+          application.restoreOverrideCursor()
+          self._wait_cursor_active = False
+      self._refresh_live_controls()
+
     def _append_live_log_lines(self, lines: Tuple[str, ...]) -> None:
       """Append new live-control lines to the operational log."""
 
@@ -862,19 +1017,253 @@ else:
       for line in lines:
         self._terminal.appendPlainText(line)
 
+    def _probe_live_device(self) -> None:
+      """Auto-detect one live companion across ADB and fastboot."""
+
+      self._start_live_command(
+        build_adb_detect_command_plan(),
+        'Detecting live device via ADB…',
+        self._apply_unified_adb_detection_trace,
+      )
+
     def _probe_live_adb_devices(self) -> None:
       """Run a live ADB probe and refresh the companion controls."""
 
-      trace = execute_android_tools_command(build_adb_detect_command_plan())
-      self._append_live_log_lines(self._render_live_trace_lines(trace))
-      self._apply_adb_detection_trace(trace)
+      self._start_live_command(
+        build_adb_detect_command_plan(),
+        'Running live ADB probe…',
+        self._apply_adb_detection_trace,
+      )
 
     def _probe_live_fastboot_devices(self) -> None:
       """Run a live fastboot probe and refresh the companion controls."""
 
-      trace = execute_android_tools_command(build_fastboot_detect_command_plan())
+      self._start_live_command(
+        build_fastboot_detect_command_plan(),
+        'Running live fastboot probe…',
+        self._apply_fastboot_detection_trace,
+      )
+
+    def _apply_unified_adb_detection_trace(
+      self,
+      trace: AndroidToolsNormalizedTrace,
+    ) -> None:
+      """Apply the unified detect flow after the initial ADB probe."""
+
+      if trace.detected_devices:
+        self._apply_adb_detection_trace(trace)
+        return
+
+      self._clear_live_dashboard_device(trace.command_plan.backend.value)
+      self._live_adb_serial = None
+      if trace.state == AndroidToolsTraceState.FAILED:
+        self._live_adb_identity = 'ADB: probe failed; checking fastboot.'
+        pending_text = 'ADB probe failed. Checking fastboot…'
+      else:
+        self._live_adb_identity = 'ADB: --'
+        pending_text = 'ADB did not find a live device. Checking fastboot…'
+      self._device_surface_cleared = True
+      self._refresh_shell_view_model()
+      self._refresh_live_controls()
+      self._start_live_command(
+        build_fastboot_detect_command_plan(),
+        pending_text,
+        self._apply_unified_fastboot_detection_trace,
+      )
+
+    def _apply_unified_fastboot_detection_trace(
+      self,
+      trace: AndroidToolsNormalizedTrace,
+    ) -> None:
+      """Apply the unified detect flow after the fastboot fallback probe."""
+
+      if trace.detected_devices:
+        self._apply_fastboot_detection_trace(trace)
+        return
+
+      self._clear_live_dashboard_device(trace.command_plan.backend.value)
+      self._live_fastboot_serial = None
+      if trace.state == AndroidToolsTraceState.FAILED:
+        self._live_fastboot_identity = 'Fastboot: probe failed.'
+        self._set_live_status(
+          'ADB did not identify a live device, and the fastboot probe failed.',
+          'danger',
+        )
+      else:
+        self._live_fastboot_identity = 'Fastboot: --'
+        self._set_live_status(
+          'No live device detected after checking ADB and fastboot.',
+          'neutral',
+        )
+      self._device_surface_cleared = True
+      self._refresh_shell_view_model()
+      self._refresh_live_controls()
+
+    def _start_live_command(
+      self,
+      command_plan: AndroidToolsCommandPlan,
+      pending_text: str,
+      completion_handler,
+    ) -> None:
+      """Run one live companion command in a worker thread."""
+
+      if self._live_command_in_progress:
+        self._set_live_status(
+          'Wait for the current live companion action to finish before sending another command.',
+          'warning',
+        )
+        return
+
+      self._boot_unhydrated = False
+      self._live_completion_handler = completion_handler
+      self._set_live_status(pending_text, 'info')
+      self._append_live_log_lines(
+        ('[COMPANION-PENDING] {command}'.format(
+          command=command_plan.display_command,
+        ),)
+      )
+      self._set_live_busy(True)
+
+      thread = QtCore.QThread(self)
+      worker = _CompanionCommandWorker(command_plan)
+      worker.moveToThread(thread)
+      thread.started.connect(worker.run)
+      worker.finished.connect(self._handle_live_command_result)
+      worker.finished.connect(thread.quit)
+      worker.finished.connect(worker.deleteLater)
+      thread.finished.connect(thread.deleteLater)
+
+      self._live_command_thread = thread
+      self._live_command_worker = worker
+      thread.start()
+
+    def _handle_live_command_result(
+      self,
+      trace: object,
+      error_message: object,
+    ) -> None:
+      """Apply one completed live companion command on the UI thread."""
+
+      completion_handler = self._live_completion_handler
+      self._live_completion_handler = None
+      self._live_command_thread = None
+      self._live_command_worker = None
+      self._set_live_busy(False)
+
+      if error_message:
+        message = str(error_message)
+        self._append_live_log_lines(('[COMPANION-ERROR] {message}'.format(
+          message=message,
+        ),))
+        self._set_live_status(message, 'danger')
+        return
+
+      if not isinstance(trace, AndroidToolsNormalizedTrace):
+        self._set_live_status(
+          'Live companion returned an unexpected result shape.',
+          'danger',
+        )
+        return
+
       self._append_live_log_lines(self._render_live_trace_lines(trace))
-      self._apply_fastboot_detection_trace(trace)
+      if completion_handler is not None:
+        try:
+          completion_handler(trace)
+        except Exception as error:  # pragma: no cover - defensive GUI guardrail
+          message = (
+            'Live companion processing failed after command completion: '
+            '{error_type}: {error}'.format(
+              error_type=type(error).__name__,
+              error=error,
+            )
+          )
+          self._append_live_log_lines(
+            ('[COMPANION-ERROR] {message}'.format(message=message),)
+          )
+          self._set_live_status(message, 'danger')
+
+    def _placeholder_action_hint(self, action_label: str, fallback_hint: str) -> str:
+      """Return honest Qt-shell wording for review-only control-deck actions."""
+
+      placeholder_hints = {
+        'Load package': (
+          'GUI placeholder. Stage firmware through the CLI or fixture selection.'
+        ),
+        'Review preflight': (
+          'GUI placeholder. Read the Preflight and Evidence panels for trust state.'
+        ),
+        'Execute flash plan': (
+          'GUI placeholder. Live flash execution is not exposed here yet.'
+        ),
+        'Resume workflow': (
+          'GUI placeholder. Resume remains scenario-backed in this stage.'
+        ),
+        'Export evidence': (
+          'GUI placeholder. Export via the CLI or scripted validation.'
+        ),
+      }
+      return placeholder_hints.get(
+        action_label,
+        'GUI placeholder. ' + fallback_hint,
+      )
+
+    def _handle_placeholder_action(self, action_label: str, hint_text: str) -> None:
+      """Make review-only control-deck actions respond honestly when clicked."""
+
+      message = '{label}: {hint}'.format(
+        label=action_label,
+        hint=hint_text,
+      )
+      self._set_live_status(message, 'warning')
+      self._append_live_log_lines(
+        ('[CONTROL-PLACEHOLDER] {message}'.format(message=message),)
+      )
+
+    def _refresh_shell_view_model(self) -> None:
+      """Rebuild the shell model after live companion metadata changes."""
+
+      self._model = build_shell_view_model(
+        self._base_session,
+        scenario_name=self._model.scenario_name,
+        package_assessment=self._base_package_assessment,
+        transport_trace=self._base_transport_trace,
+        live_device=self._live_dashboard_device,
+        boot_unhydrated=self._boot_unhydrated,
+        device_surface_cleared=self._device_surface_cleared,
+      )
+      self._panel_titles = tuple(panel.title for panel in self._model.panels)
+      self._action_labels = tuple(action.label for action in self._model.control_actions)
+      self.setWindowTitle(
+        'Calamum Vulcan — {phase}'.format(phase=self._model.phase_label)
+      )
+      self._rebuild_ui()
+
+    def _build_live_dashboard_device(
+      self,
+      device: AndroidDeviceRecord,
+      backend: str,
+    ) -> LiveCompanionDeviceViewModel:
+      """Build one live-device overlay for the main dashboard surfaces."""
+
+      return LiveCompanionDeviceViewModel(
+        backend=backend,
+        serial=device.serial,
+        state=device.state,
+        transport=device.transport,
+        product_code=device.model or device.product,
+        model_name=device.model,
+        device_name=device.device,
+      )
+
+    def _clear_live_dashboard_device(self, backend: str) -> None:
+      """Clear the live dashboard overlay when the active backend no longer detects a device."""
+
+      if (
+        self._live_dashboard_device is None
+        or self._live_dashboard_device.backend != backend
+      ):
+        return
+      self._live_dashboard_device = None
 
     def _apply_adb_detection_trace(
       self,
@@ -884,23 +1273,56 @@ else:
 
       ready_device = self._first_device_with_state(trace.detected_devices, 'device')
       if ready_device is not None:
+        self._device_surface_cleared = False
+        self._live_dashboard_device = self._build_live_dashboard_device(
+          ready_device,
+          trace.command_plan.backend.value,
+        )
+        self._refresh_shell_view_model()
         self._live_adb_serial = ready_device.serial
-        self._live_adb_identity = 'ADB selected serial: {identity}'.format(
+        self._live_adb_identity = 'ADB: {identity}'.format(
           identity=self._device_identity_text(ready_device),
         )
-        self._set_live_status(trace.summary, 'success')
+        self._set_live_status(
+          '{summary} Active companion: {identity} via ADB.'.format(
+            summary=trace.summary,
+            identity=self._device_identity_text(ready_device),
+          ),
+          'success',
+        )
       elif trace.detected_devices:
+        self._device_surface_cleared = False
+        selected_device = trace.detected_devices[0]
+        self._live_dashboard_device = self._build_live_dashboard_device(
+          selected_device,
+          trace.command_plan.backend.value,
+        )
+        self._refresh_shell_view_model()
         self._live_adb_serial = None
-        self._live_adb_identity = 'ADB detected {identity}; authorize or reconnect before reboot commands.'.format(
-          identity=self._device_identity_text(trace.detected_devices[0]),
+        self._live_adb_identity = 'ADB: {identity} (authorize)'.format(
+          identity=self._device_identity_text(selected_device),
         )
         tone = 'warning' if trace.state != AndroidToolsTraceState.FAILED else 'danger'
-        self._set_live_status(trace.summary, tone)
+        self._set_live_status(
+          '{summary} Active companion: {identity} via ADB; authorize or reconnect before reboot commands.'.format(
+            summary=trace.summary,
+            identity=self._device_identity_text(selected_device),
+          ),
+          tone,
+        )
       else:
+        self._clear_live_dashboard_device(trace.command_plan.backend.value)
+        self._device_surface_cleared = True
+        self._refresh_shell_view_model()
         self._live_adb_serial = None
-        self._live_adb_identity = 'ADB selected serial: awaiting live probe.'
+        self._live_adb_identity = 'ADB: --'
         tone = 'neutral' if trace.state == AndroidToolsTraceState.NO_DEVICES else 'danger'
-        self._set_live_status(trace.summary, tone)
+        self._set_live_status(
+          '{summary} No live ADB companion detected.'.format(
+            summary=trace.summary,
+          ),
+          tone,
+        )
       self._refresh_live_controls()
 
     def _apply_fastboot_detection_trace(
@@ -910,17 +1332,37 @@ else:
       """Apply one fastboot detection trace to shell-local live state."""
 
       if trace.detected_devices:
+        self._device_surface_cleared = False
         selected = trace.detected_devices[0]
+        self._live_dashboard_device = self._build_live_dashboard_device(
+          selected,
+          trace.command_plan.backend.value,
+        )
+        self._refresh_shell_view_model()
         self._live_fastboot_serial = selected.serial
-        self._live_fastboot_identity = 'Fastboot selected serial: {identity}'.format(
+        self._live_fastboot_identity = 'Fastboot: {identity}'.format(
           identity=self._device_identity_text(selected),
         )
-        self._set_live_status(trace.summary, 'success')
+        self._set_live_status(
+          '{summary} Active companion: {identity} via Fastboot.'.format(
+            summary=trace.summary,
+            identity=self._device_identity_text(selected),
+          ),
+          'success',
+        )
       else:
+        self._clear_live_dashboard_device(trace.command_plan.backend.value)
+        self._device_surface_cleared = True
+        self._refresh_shell_view_model()
         self._live_fastboot_serial = None
-        self._live_fastboot_identity = 'Fastboot selected serial: awaiting probe.'
+        self._live_fastboot_identity = 'Fastboot: --'
         tone = 'neutral' if trace.state == AndroidToolsTraceState.NO_DEVICES else 'danger'
-        self._set_live_status(trace.summary, tone)
+        self._set_live_status(
+          '{summary} No live fastboot companion detected.'.format(
+            summary=trace.summary,
+          ),
+          tone,
+        )
       self._refresh_live_controls()
 
     def _handle_adb_reboot(self) -> None:
@@ -939,24 +1381,36 @@ else:
       )
       if not self._confirm_live_command(command_plan):
         return
-      trace = execute_android_tools_command(command_plan)
-      self._append_live_log_lines(self._render_live_trace_lines(trace))
+      pending_text = 'Running live ADB reboot command for {target}…'.format(
+        target=target,
+      )
+      if command_plan.vendor_specific:
+        pending_text = 'Running vendor-specific ADB reboot command for {target}…'.format(
+          target=target,
+        )
+      self._start_live_command(
+        command_plan,
+        pending_text,
+        self._apply_adb_reboot_trace,
+      )
+
+    def _apply_adb_reboot_trace(
+      self,
+      trace: AndroidToolsNormalizedTrace,
+    ) -> None:
+      """Apply one completed ADB reboot trace to shell-local live state."""
+
       if trace.state == AndroidToolsTraceState.COMPLETED:
         self._live_adb_serial = None
-        self._live_adb_identity = 'ADB selected serial: re-detect after reboot handoff.'
+        self._live_adb_identity = 'ADB: re-detect after reboot.'
         self._set_live_status(
           'ADB reboot accepted for {target}; re-detect after the device settles into its new mode.'.format(
-            target=target,
+            target=trace.command_plan.reboot_target or 'system',
           ),
           'warning',
         )
       else:
         self._set_live_status(trace.summary, 'danger')
-        QtWidgets.QMessageBox.warning(
-          self,
-          'ADB reboot failed',
-          '\n'.join(trace.notes) or trace.summary,
-        )
       self._refresh_live_controls()
 
     def _handle_fastboot_reboot(self) -> None:
@@ -975,24 +1429,29 @@ else:
       )
       if not self._confirm_live_command(command_plan):
         return
-      trace = execute_android_tools_command(command_plan)
-      self._append_live_log_lines(self._render_live_trace_lines(trace))
+      self._start_live_command(
+        command_plan,
+        'Running live fastboot reboot command for {target}…'.format(target=target),
+        self._apply_fastboot_reboot_trace,
+      )
+
+    def _apply_fastboot_reboot_trace(
+      self,
+      trace: AndroidToolsNormalizedTrace,
+    ) -> None:
+      """Apply one completed fastboot reboot trace to shell-local live state."""
+
       if trace.state == AndroidToolsTraceState.COMPLETED:
         self._live_fastboot_serial = None
-        self._live_fastboot_identity = 'Fastboot selected serial: re-detect after reboot handoff.'
+        self._live_fastboot_identity = 'Fastboot: re-detect after reboot.'
         self._set_live_status(
           'Fastboot reboot accepted for {target}; re-detect after the device settles into its new mode.'.format(
-            target=target,
+            target=trace.command_plan.reboot_target or 'system',
           ),
           'warning',
         )
       else:
         self._set_live_status(trace.summary, 'danger')
-        QtWidgets.QMessageBox.warning(
-          self,
-          'Fastboot reboot failed',
-          '\n'.join(trace.notes) or trace.summary,
-        )
       self._refresh_live_controls()
 
     def _confirm_live_command(self, command_plan: AndroidToolsCommandPlan) -> bool:
@@ -1033,6 +1492,16 @@ else:
           default,
         )
       return result == QtWidgets.QMessageBox.StandardButton.Yes
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+      """Restore any temporary busy cursor state before the window closes."""
+
+      if self._wait_cursor_active:
+        application = QtWidgets.QApplication.instance()
+        if application is not None:
+          application.restoreOverrideCursor()
+        self._wait_cursor_active = False
+      super().closeEvent(event)
 
     def _render_live_trace_lines(
       self,

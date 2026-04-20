@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 from typing import Callable
+from typing import Dict
 from typing import Optional
 
 from .model import AndroidToolsCommandPlan
@@ -47,6 +48,7 @@ def _run_process(
       errors='replace',
       text=True,
       timeout=PROCESS_TIMEOUT_SECONDS,
+      **_subprocess_window_suppression_kwargs(),
     )
   except FileNotFoundError:
     return AndroidToolsProcessResult(
@@ -90,6 +92,28 @@ def _run_process(
     stdout_lines=tuple(completed.stdout.splitlines()),
     stderr_lines=tuple(completed.stderr.splitlines()),
   )
+
+
+def _subprocess_window_suppression_kwargs() -> Dict[str, object]:
+  """Return platform-specific subprocess options that avoid terminal ghosts."""
+
+  if os.name != 'nt':
+    return {}
+
+  kwargs = {}  # type: Dict[str, object]
+  creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+  if creationflags:
+    kwargs['creationflags'] = creationflags
+
+  startupinfo_factory = getattr(subprocess, 'STARTUPINFO', None)
+  use_show_window = getattr(subprocess, 'STARTF_USESHOWWINDOW', 0)
+  hide_window = getattr(subprocess, 'SW_HIDE', 0)
+  if startupinfo_factory is not None and use_show_window:
+    startupinfo = startupinfo_factory()
+    startupinfo.dwFlags |= use_show_window
+    startupinfo.wShowWindow = hide_window
+    kwargs['startupinfo'] = startupinfo
+  return kwargs
 
 
 def _resolve_executable(executable: str) -> str:

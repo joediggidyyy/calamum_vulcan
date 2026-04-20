@@ -7,6 +7,8 @@ from enum import Enum
 from typing import Optional
 from typing import Tuple
 
+from calamum_vulcan.domain.device_registry import DeviceRegistryMatchKind
+from calamum_vulcan.domain.device_registry import resolve_device_profile
 from calamum_vulcan.domain.state import PlatformSession
 from calamum_vulcan.domain.state import SessionPhase
 
@@ -60,6 +62,12 @@ class PreflightInput:
   package_selected: bool = False
   package_complete: bool = False
   checksums_present: bool = False
+  snapshot_required: bool = False
+  snapshot_created: bool = False
+  snapshot_verified: bool = False
+  snapshot_drift_detected: bool = False
+  device_registry_known: bool = False
+  device_registry_match_kind: DeviceRegistryMatchKind = DeviceRegistryMatchKind.NOT_PROVIDED
   product_code_match: bool = False
   warnings_acknowledged: bool = False
   destructive_operation: bool = False
@@ -68,7 +76,15 @@ class PreflightInput:
   cable_quality: str = 'known_good'
   reboot_mode: str = 'standard'
   product_code: Optional[str] = None
+  canonical_product_code: Optional[str] = None
+  device_marketing_name: Optional[str] = None
+  device_mode_entry_instructions: Tuple[str, ...] = ()
+  device_known_quirks: Tuple[str, ...] = ()
   package_id: Optional[str] = None
+  snapshot_id: Optional[str] = None
+  suspicious_warning_count: int = 0
+  suspiciousness_summary: str = 'No suspicious Android traits detected.'
+  suspicious_indicator_ids: Tuple[str, ...] = ()
   session_phase: Optional[SessionPhase] = None
   notes: Tuple[str, ...] = ()
 
@@ -80,6 +96,7 @@ class PreflightInput:
   ) -> 'PreflightInput':
     """Build a conservative preflight input snapshot from session state."""
 
+    registry_resolution = resolve_device_profile(session.product_code)
     defaults = {
       'device_present': session.guards.has_device,
       'in_download_mode': session.mode == 'download',
@@ -88,7 +105,13 @@ class PreflightInput:
       'package_selected': session.guards.package_loaded,
       'package_complete': session.guards.package_loaded,
       'checksums_present': session.guards.package_loaded,
-      'product_code_match': bool(session.product_code)
+      'snapshot_required': False,
+      'snapshot_created': False,
+      'snapshot_verified': False,
+      'snapshot_drift_detected': False,
+      'device_registry_known': registry_resolution.known,
+      'device_registry_match_kind': registry_resolution.match_kind,
+      'product_code_match': bool(registry_resolution.detected_product_code)
       and session.phase != SessionPhase.VALIDATION_BLOCKED,
       'warnings_acknowledged': session.guards.warnings_acknowledged,
       'destructive_operation': session.guards.operation_is_destructive,
@@ -96,8 +119,16 @@ class PreflightInput:
       'battery_level': 72 if session.guards.has_device else None,
       'cable_quality': 'known_good',
       'reboot_mode': _infer_reboot_mode(session),
-      'product_code': session.product_code,
+      'product_code': registry_resolution.detected_product_code,
+      'canonical_product_code': registry_resolution.canonical_product_code,
+      'device_marketing_name': registry_resolution.marketing_name,
+      'device_mode_entry_instructions': registry_resolution.mode_entry_instructions,
+      'device_known_quirks': registry_resolution.known_quirks,
       'package_id': session.package_id,
+      'snapshot_id': None,
+      'suspicious_warning_count': 0,
+      'suspiciousness_summary': 'No suspicious Android traits detected.',
+      'suspicious_indicator_ids': (),
       'session_phase': session.phase,
       'notes': session.preflight_notes,
     }

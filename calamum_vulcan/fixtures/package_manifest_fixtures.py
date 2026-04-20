@@ -14,6 +14,7 @@ PUBLIC_PACKAGE_MANIFEST_FIXTURES = {
   'matched': 'matched_recovery_package.json',
   'mismatched': 'mismatched_recovery_package.json',
   'incomplete': 'incomplete_recovery_package.json',
+  'suspicious-review': 'suspicious_review_package.json',
 }  # type: Dict[str, str]
 
 INTERNAL_SCENARIO_PACKAGE_MANIFEST_FIXTURES = {

@@ -26,6 +26,7 @@ ARCHIVE_ROOT = REPO_ROOT / 'temp' / 'fs_p02_build_artifacts'
 EXPECTED_WHEEL_SUFFIXES = (
   'calamum_vulcan/__init__.py',
   'calamum_vulcan/app/__main__.py',
+  'calamum_vulcan/app/qt_compat.py',
   'calamum_vulcan/launch_shell.py',
   'calamum_vulcan/assets/branding/calamum_logo_color.png',
   'calamum_vulcan/assets/branding/calamum_taskbar_icon.png',
@@ -65,6 +66,28 @@ def _run(command: Sequence[str]) -> None:
   result = subprocess.run(
     command,
     cwd=REPO_ROOT,
+    capture_output=True,
+    text=True,
+  )
+  if result.returncode != 0:
+    if result.stdout:
+      print(result.stdout)
+    if result.stderr:
+      print(result.stderr, file=sys.stderr)
+    raise SystemExit(result.returncode)
+
+
+def _run_build() -> None:
+  result = subprocess.run(
+    [
+      sys.executable,
+      '-m', 'build',
+      '--sdist',
+      '--wheel',
+      '--outdir', str(DIST_DIR),
+      str(REPO_ROOT),
+    ],
+    cwd=REPO_ROOT.parent,
     capture_output=True,
     text=True,
   )
@@ -129,7 +152,7 @@ def main() -> int:
     if egg_info_dir.is_dir():
       shutil.rmtree(egg_info_dir)
 
-  _run([sys.executable, '-m', 'build', '--sdist', '--wheel'])
+  _run_build()
 
   wheels = sorted(DIST_DIR.glob('*.whl'))
   sdists = sorted(DIST_DIR.glob('*.tar.gz'))

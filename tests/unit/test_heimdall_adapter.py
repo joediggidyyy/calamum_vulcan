@@ -15,10 +15,14 @@ from calamum_vulcan.adapters.heimdall import HeimdallTraceState
 from calamum_vulcan.adapters.heimdall import build_detect_device_command_plan
 from calamum_vulcan.adapters.heimdall import build_download_pit_command_plan
 from calamum_vulcan.adapters.heimdall import build_flash_command_plan
+from calamum_vulcan.adapters.heimdall import build_flash_command_plan_from_reviewed_plan
 from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
 from calamum_vulcan.adapters.heimdall import replay_heimdall_process_result
+from calamum_vulcan.adapters.heimdall import run_bounded_heimdall_flash_session
 from calamum_vulcan.app.demo import build_demo_package_assessment
 from calamum_vulcan.app.demo import build_demo_session
+from calamum_vulcan.domain.flash_plan import build_reviewed_flash_plan
+from calamum_vulcan.domain.state import RuntimeSessionRejected
 from calamum_vulcan.domain.state import SessionEventType
 from calamum_vulcan.domain.state import SessionPhase
 from calamum_vulcan.domain.state import replay_events
@@ -46,11 +50,23 @@ class HeimdallAdapterTests(unittest.TestCase):
       session=base_session,
       package_fixture_name='matched',
     )
-    command_plan = build_flash_command_plan(package_assessment)
+    reviewed_flash_plan = build_reviewed_flash_plan(package_assessment)
+    command_plan = build_flash_command_plan_from_reviewed_plan(reviewed_flash_plan)
 
+    self.assertTrue(reviewed_flash_plan.ready_for_transport)
     self.assertIn('--RECOVERY', command_plan.arguments)
     self.assertIn('recovery.img', command_plan.arguments)
     self.assertIn('--no-reboot', command_plan.arguments)
+
+  def test_package_assessment_flash_builder_routes_through_reviewed_plan(self) -> None:
+    base_session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=base_session)
+
+    command_plan = build_flash_command_plan(package_assessment)
+
+    self.assertEqual(command_plan.arguments[0], 'flash')
+    self.assertIn('--RECOVERY', command_plan.arguments)
+    self.assertIn('vbmeta.img', command_plan.arguments)
 
   def test_successful_flash_trace_replays_to_completed_session(self) -> None:
     base_session = build_demo_session('ready')
@@ -87,6 +103,44 @@ class HeimdallAdapterTests(unittest.TestCase):
     self.assertEqual(trace.state, HeimdallTraceState.FAILED)
     self.assertEqual(session.phase, SessionPhase.FAILED)
     self.assertEqual(session.failure_reason, 'USB transfer timeout during partition write')
+
+  def test_bounded_flash_session_runs_reviewed_plan_through_explicit_runner(self) -> None:
+    base_session = replay_events(happy_path_events()[:-2])
+    package_assessment = build_demo_package_assessment(
+      'happy',
+      session=base_session,
+      package_fixture_name='matched',
+    )
+    reviewed_flash_plan = build_reviewed_flash_plan(package_assessment)
+    process_result = load_heimdall_process_fixture('flash-success')
+
+    runtime_result = run_bounded_heimdall_flash_session(
+      base_session,
+      reviewed_flash_plan,
+      runner=lambda command_plan: process_result,
+      fixture_name='flash-success',
+    )
+
+    self.assertEqual(runtime_result.execution_source, 'explicit_runner')
+    self.assertEqual(runtime_result.trace.state, HeimdallTraceState.COMPLETED)
+    self.assertEqual(runtime_result.session.phase, SessionPhase.COMPLETED)
+    self.assertEqual(runtime_result.reviewed_plan_id, reviewed_flash_plan.plan_id)
+
+  def test_bounded_flash_session_rejects_non_ready_session(self) -> None:
+    ready_session = replay_events(happy_path_events()[:-2])
+    package_assessment = build_demo_package_assessment(
+      'happy',
+      session=ready_session,
+      package_fixture_name='matched',
+    )
+    reviewed_flash_plan = build_reviewed_flash_plan(package_assessment)
+
+    with self.assertRaises(RuntimeSessionRejected):
+      run_bounded_heimdall_flash_session(
+        build_demo_session('blocked'),
+        reviewed_flash_plan,
+        runner=lambda command_plan: load_heimdall_process_fixture('flash-success'),
+      )
 
   def test_download_pit_plan_remains_bounded_and_explicit(self) -> None:
     command_plan = build_download_pit_command_plan(output_path='artifacts/device.pit')

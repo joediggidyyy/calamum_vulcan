@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import List
 
+from calamum_vulcan.domain.device_registry import DeviceRegistryMatchKind
+
 from .model import PreflightCategory
 from .model import PreflightGate
 from .model import PreflightInput
@@ -22,6 +24,7 @@ def evaluate_preflight(inputs: PreflightInput) -> PreflightReport:
   signals.append(_device_presence_signal(inputs))
 
   if inputs.device_present:
+    signals.append(_device_registry_signal(inputs))
     signals.append(_device_mode_signal(inputs))
     signals.append(_battery_signal(inputs))
     signals.append(_cable_signal(inputs))
@@ -31,8 +34,14 @@ def evaluate_preflight(inputs: PreflightInput) -> PreflightReport:
   if inputs.package_selected:
     signals.append(_package_completeness_signal(inputs))
     signals.append(_checksum_signal(inputs))
+    signals.append(_analyzed_snapshot_signal(inputs))
+    signals.append(_package_suspiciousness_signal(inputs))
 
-  if inputs.device_present and inputs.package_selected:
+  if (
+    inputs.device_present
+    and inputs.package_selected
+    and inputs.device_registry_known
+  ):
     signals.append(_compatibility_signal(inputs))
 
   signals.append(_destructive_ack_signal(inputs))
@@ -49,9 +58,17 @@ def evaluate_preflight(inputs: PreflightInput) -> PreflightReport:
   warning_count = _count_signals(signals, PreflightSeverity.WARN)
   block_count = _count_signals(signals, PreflightSeverity.BLOCK)
 
-  gate = _determine_gate(block_count, warning_count)
+  gate = _determine_gate(
+    block_count,
+    warning_count,
+    warnings_acknowledged=inputs.warnings_acknowledged,
+  )
   ready_for_execution = gate == PreflightGate.READY
-  summary, recommended_action = _summary_for_gate(gate)
+  summary, recommended_action = _summary_for_gate(
+    gate,
+    warnings_acknowledged=inputs.warnings_acknowledged,
+    warning_count=warning_count,
+  )
 
   return PreflightReport(
     gate=gate,
@@ -142,6 +159,53 @@ def _device_mode_signal(inputs: PreflightInput) -> PreflightSignal:
     title='Download mode missing',
     summary='The attached device is not yet in Samsung download mode.',
     remediation='Re-enter download mode before enabling any flash path.',
+  )
+
+
+def _device_registry_signal(inputs: PreflightInput) -> PreflightSignal:
+  if not inputs.product_code:
+    return PreflightSignal(
+      rule_id='device_registry',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.BLOCK,
+      title='Device product code missing',
+      summary='The attached device did not produce a product code for registry-backed review.',
+      remediation='Re-detect the device before allowing compatibility checks.',
+    )
+  if not inputs.device_registry_known:
+    return PreflightSignal(
+      rule_id='device_registry',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.BLOCK,
+      title='Device profile unknown',
+      summary='The repo-owned device registry does not recognize {product_code}.'.format(
+        product_code=inputs.product_code,
+      ),
+      remediation='Add or confirm a supported device-registry profile before execution.',
+    )
+  if inputs.device_registry_match_kind == DeviceRegistryMatchKind.ALIAS:
+    return PreflightSignal(
+      rule_id='device_registry',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.PASS,
+      title='Device profile resolved via alias',
+      summary='{detected} resolves to {canonical} ({name}) in the device registry.'.format(
+        detected=inputs.product_code,
+        canonical=inputs.canonical_product_code or inputs.product_code,
+        name=inputs.device_marketing_name or 'Samsung device',
+      ),
+      remediation='No registry action required.',
+    )
+  return PreflightSignal(
+    rule_id='device_registry',
+    category=PreflightCategory.COMPATIBILITY,
+    severity=PreflightSeverity.PASS,
+    title='Device profile resolved',
+    summary='The device registry recognizes {name} ({product_code}).'.format(
+      name=inputs.device_marketing_name or 'Samsung device',
+      product_code=inputs.canonical_product_code or inputs.product_code,
+    ),
+    remediation='No registry action required.',
   )
 
 
@@ -259,7 +323,7 @@ def _checksum_signal(inputs: PreflightInput) -> PreflightSignal:
       category=PreflightCategory.PACKAGE,
       severity=PreflightSeverity.PASS,
       title='Checksums present',
-      summary='Checksum placeholders or values exist for the staged package.',
+      summary='Package integrity data exists for the staged package review path.',
       remediation='No checksum action required.',
     )
   return PreflightSignal(
@@ -272,14 +336,90 @@ def _checksum_signal(inputs: PreflightInput) -> PreflightSignal:
   )
 
 
+def _analyzed_snapshot_signal(inputs: PreflightInput) -> PreflightSignal:
+  if not inputs.snapshot_required:
+    return PreflightSignal(
+      rule_id='analyzed_snapshot',
+      category=PreflightCategory.PACKAGE,
+      severity=PreflightSeverity.PASS,
+      title='Analyzed snapshot deferred',
+      summary='This review path does not yet require a sealed analyzed snapshot.',
+      remediation='No analyzed-snapshot action required for the current fixture path.',
+    )
+  if not inputs.snapshot_created:
+    return PreflightSignal(
+      rule_id='analyzed_snapshot',
+      category=PreflightCategory.PACKAGE,
+      severity=PreflightSeverity.BLOCK,
+      title='Analyzed snapshot missing',
+      summary='No sealed analyzed snapshot exists for the current reviewed package.',
+      remediation='Seal a reviewed package snapshot before allowing execution.',
+    )
+  if inputs.snapshot_drift_detected or not inputs.snapshot_verified:
+    return PreflightSignal(
+      rule_id='analyzed_snapshot',
+      category=PreflightCategory.PACKAGE,
+      severity=PreflightSeverity.BLOCK,
+      title='Analyzed snapshot drift detected',
+      summary='The reviewed package snapshot no longer matches the current execution input.',
+      remediation='Re-import, re-seal, and re-verify the reviewed package before execution.',
+    )
+  return PreflightSignal(
+    rule_id='analyzed_snapshot',
+    category=PreflightCategory.PACKAGE,
+    severity=PreflightSeverity.PASS,
+    title='Analyzed snapshot verified',
+    summary='The reviewed package snapshot was sealed and re-verified immediately before execution.',
+    remediation='No analyzed-snapshot follow-up required.',
+  )
+
+
+def _package_suspiciousness_signal(inputs: PreflightInput) -> PreflightSignal:
+  if inputs.suspicious_warning_count <= 0:
+    return PreflightSignal(
+      rule_id='package_suspiciousness',
+      category=PreflightCategory.PACKAGE,
+      severity=PreflightSeverity.PASS,
+      title='No suspicious Android traits surfaced',
+      summary='The current package review did not surface warning-tier suspicious Android traits.',
+      remediation='No suspiciousness follow-up required.',
+    )
+  return PreflightSignal(
+    rule_id='package_suspiciousness',
+    category=PreflightCategory.PACKAGE,
+    severity=PreflightSeverity.WARN,
+    title='Suspicious Android traits detected',
+    summary=inputs.suspiciousness_summary,
+    remediation='Review and explicitly acknowledge the warning-tier suspicious Android traits before execution.',
+  )
+
+
 def _compatibility_signal(inputs: PreflightInput) -> PreflightSignal:
   if inputs.product_code_match:
+    if (
+      inputs.device_registry_match_kind == DeviceRegistryMatchKind.ALIAS
+      and inputs.canonical_product_code is not None
+    ):
+      return PreflightSignal(
+        rule_id='product_code_match',
+        category=PreflightCategory.COMPATIBILITY,
+        severity=PreflightSeverity.PASS,
+        title='Product code matched through alias resolution',
+        summary='The staged package matches detected {detected} through canonical device code {canonical}.'.format(
+          detected=inputs.product_code,
+          canonical=inputs.canonical_product_code,
+        ),
+        remediation='No compatibility action required.',
+      )
     return PreflightSignal(
       rule_id='product_code_match',
       category=PreflightCategory.COMPATIBILITY,
       severity=PreflightSeverity.PASS,
       title='Product code matched',
-      summary='The staged package is compatible with the detected product code.',
+      summary='The staged package is compatible with {name} ({product_code}).'.format(
+        name=inputs.device_marketing_name or 'the detected device',
+        product_code=inputs.canonical_product_code or inputs.product_code,
+      ),
       remediation='No compatibility action required.',
     )
   return PreflightSignal(
@@ -287,8 +427,11 @@ def _compatibility_signal(inputs: PreflightInput) -> PreflightSignal:
     category=PreflightCategory.COMPATIBILITY,
     severity=PreflightSeverity.BLOCK,
     title='Product code mismatch',
-    summary='Package compatibility does not match the detected Samsung product code.',
-    remediation='Switch to a compatible package before continuing.',
+    summary='Package compatibility does not include {name} ({product_code}).'.format(
+      name=inputs.device_marketing_name or 'the detected Samsung device',
+      product_code=inputs.canonical_product_code or inputs.product_code or 'unknown',
+    ),
+    remediation='Switch to a package that explicitly supports the resolved device profile before continuing.',
   )
 
 
@@ -351,15 +494,22 @@ def _operator_acknowledgement_signal(
 def _determine_gate(
   block_count: int,
   warning_count: int,
+  warnings_acknowledged: bool,
 ) -> PreflightGate:
   if block_count > 0:
     return PreflightGate.BLOCKED
   if warning_count > 0:
+    if warnings_acknowledged:
+      return PreflightGate.READY
     return PreflightGate.WARN
   return PreflightGate.READY
 
 
-def _summary_for_gate(gate: PreflightGate) -> tuple:
+def _summary_for_gate(
+  gate: PreflightGate,
+  warnings_acknowledged: bool,
+  warning_count: int,
+) -> tuple:
   if gate == PreflightGate.BLOCKED:
     return (
       'Preflight is blocked until blocking findings are resolved.',
@@ -369,6 +519,11 @@ def _summary_for_gate(gate: PreflightGate) -> tuple:
     return (
       'Preflight has warnings that still require operator acknowledgement.',
       'Review and acknowledge the remaining warnings before execution.',
+    )
+  if warning_count > 0 and warnings_acknowledged:
+    return (
+      'Preflight warnings are acknowledged and the execution gate is open.',
+      'Preserve the acknowledged warning evidence while reviewing the execution surface.',
     )
   return (
     'Preflight gate is open for the current device and package.',

@@ -21,7 +21,6 @@ if str(REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(REPO_ROOT))
 
 from calamum_vulcan.validation import run_security_validation_suite
-from calamum_vulcan.validation import safe_extract_zip_archive
 from calamum_vulcan.validation import write_security_validation_artifacts
 
 
@@ -160,8 +159,17 @@ def _find_single_wheel() -> Path:
   return wheels[0]
 
 
-def _extract_wheel(wheel_path: Path, install_root: Path) -> None:
-  safe_extract_zip_archive(wheel_path, install_root)
+def _install_wheel(wheel_path: Path, install_root: Path) -> None:
+  _run(
+    [
+      sys.executable,
+      '-m', 'pip', 'install',
+      '--no-deps',
+      '--target', str(install_root),
+      str(wheel_path),
+    ],
+    cwd=REPO_ROOT,
+  )
 
 
 def _installed_cli_probe_code(install_root: Path) -> str:
@@ -463,8 +471,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     scenario['name'] for scenario in selected_scenarios
   ))
 
-  _extract_wheel(wheel_path, install_root)
-  _append_progress(progress_path, '[suite] extracted installed-artifact wheel')
+  _install_wheel(wheel_path, install_root)
+  _append_progress(progress_path, '[suite] installed candidate wheel into installed-artifact root')
 
   source_results = _run_scenario_context(
     'source_root',

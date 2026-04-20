@@ -26,13 +26,20 @@ from .view_models import build_shell_view_model
 from .view_models import describe_shell
 
 
-INTEGRATION_SUITE_NAMES = ('sprint-close',)
+INTEGRATION_SUITE_NAMES = ('sprint-close', 'orchestration-close')
 
 SPRINT_CLOSE_CARRY_FORWARD_DEBT = (
   'Keep live-device subprocess transport out of `0.1.0`; the next release should define the first bounded runtime session loop explicitly.',
   'Decide which transport artifacts should graduate from summarized evidence into preserved transcript files in `0.2.0`.',
   'Promote PIT-oriented adapter capabilities into operator-driven shell controls only after the current shell contract stays stable under live transport.',
   'Close the Qt deployment/font-packaging debt before broader distribution or screenshot-heavy release review.',
+)
+
+ORCHESTRATION_CLOSE_CARRY_FORWARD_DEBT = (
+  'Decide whether bounded Heimdall subprocess execution should stay lab-only in `0.3.0` or graduate into a more explicit operator control surface.',
+  'Promote transcript packaging beyond plain transport logs only after redaction, PIT handling, and evidence-volume policy stay explicit.',
+  'Decide whether future runtime lanes should bind live PIT/device interrogation into reviewed-plan truth or keep those concerns separated.',
+  'Keep GUI startup detection explicit and user-invoked until any background probing can prove it stays off the UI thread.',
 )
 
 
@@ -66,6 +73,10 @@ class SprintCloseScenarioResult:
   panel_titles: Tuple[str, ...]
   enabled_actions: Tuple[str, ...]
   shell_summary: str
+  transcript_preserved: bool = False
+  transcript_reference_file: Optional[str] = None
+  transcript_line_count: int = 0
+  transcript_policy: str = 'summary_only'
 
 
 @dataclass(frozen=True)
@@ -177,6 +188,38 @@ def build_sprint_close_bundle(
   )
 
 
+def build_orchestration_close_bundle(
+  captured_at_utc: Optional[str] = None,
+) -> SprintCloseBundle:
+  """Build the FS2-07 orchestration-close bundle for Sprint 0.2.0."""
+
+  captured = captured_at_utc or _utc_now()
+  scenarios = tuple(
+    _build_scenario_result(spec, captured) for spec in SPRINT_CLOSE_SCENARIOS
+  )
+  proof_points = _build_orchestration_proof_points(scenarios)
+  passed_count = sum(1 for point in proof_points if point.passed)
+  summary = (
+    'Sprint 0.2.0 closes with {passed}/{total} orchestration-close proof points '
+    'satisfied across {scenario_count} integrated scenarios.'.format(
+      passed=passed_count,
+      total=len(proof_points),
+      scenario_count=len(scenarios),
+    )
+  )
+  return SprintCloseBundle(
+    schema_version=REPORT_SCHEMA_VERSION,
+    bundle_id=_bundle_id(captured, prefix='cv-fs2-07-orchestration-close'),
+    release_version='0.2.0',
+    suite_name='orchestration-close',
+    captured_at_utc=captured,
+    summary=summary,
+    proof_points=proof_points,
+    scenarios=scenarios,
+    carry_forward_debt=ORCHESTRATION_CLOSE_CARRY_FORWARD_DEBT,
+  )
+
+
 def serialize_sprint_close_bundle_json(bundle: SprintCloseBundle) -> str:
   """Render one sprint-close bundle as formatted JSON."""
 
@@ -187,7 +230,7 @@ def render_sprint_close_bundle_markdown(bundle: SprintCloseBundle) -> str:
   """Render one sprint-close bundle as a readable Markdown review surface."""
 
   lines = [
-    '## Calamum Vulcan FS-08 sprint-close bundle',
+    _bundle_heading(bundle),
     '',
     '- bundle id: `{bundle_id}`'.format(bundle_id=bundle.bundle_id),
     '- captured at: `{captured}`'.format(captured=bundle.captured_at_utc),
@@ -216,13 +259,13 @@ def render_sprint_close_bundle_markdown(bundle: SprintCloseBundle) -> str:
       '',
       '### Scenario results',
       '',
-      '| Scenario | Source | Phase | Gate | Outcome | Transport | Export |',
-      '| --- | --- | --- | --- | --- | --- | --- |',
+      '| Scenario | Source | Phase | Gate | Outcome | Transport | Export | Transcript |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- |',
     ]
   )
   for scenario in bundle.scenarios:
     lines.append(
-      '| `{scenario_id}` | `{source}` | `{phase}` | `{gate}` | `{outcome}` | `{transport}` | `{export}` |'.format(
+      '| `{scenario_id}` | `{source}` | `{phase}` | `{gate}` | `{outcome}` | `{transport}` | `{export}` | `{transcript}` |'.format(
         scenario_id=scenario.scenario_id,
         source=scenario.transport_source,
         phase=scenario.phase_label,
@@ -230,6 +273,7 @@ def render_sprint_close_bundle_markdown(bundle: SprintCloseBundle) -> str:
         outcome=scenario.outcome,
         transport=scenario.transport_state,
         export='ready' if scenario.export_ready else 'not_ready',
+        transcript='preserved' if scenario.transcript_preserved else 'summary_only',
       )
     )
 
@@ -245,11 +289,18 @@ def render_sprint_close_bundle_markdown(bundle: SprintCloseBundle) -> str:
         '- enabled actions: {actions}'.format(
           actions=', '.join(scenario.enabled_actions) or 'none'
         ),
+        '- transcript: {transcript}'.format(
+          transcript=(
+            scenario.transcript_reference_file
+            if scenario.transcript_reference_file is not None
+            else 'summary_only'
+          )
+        ),
         '',
       ]
     )
 
-  lines.extend(['### Carry-forward debt into 0.2.0', ''])
+  lines.extend([_carry_forward_heading(bundle), ''])
   for item in bundle.carry_forward_debt:
     lines.append('- {item}'.format(item=item))
 
@@ -311,6 +362,10 @@ def _build_scenario_result(
     panel_titles=tuple(panel.title for panel in model.panels),
     enabled_actions=enabled_actions,
     shell_summary=describe_shell(model),
+    transcript_preserved=report.transcript.preserved,
+    transcript_reference_file=report.transcript.reference_file_name,
+    transcript_line_count=report.transcript.line_count,
+    transcript_policy=report.transcript.policy,
   )
 
 
@@ -415,9 +470,96 @@ def _build_proof_points(
   )
 
 
-def _bundle_id(captured_at_utc: str) -> str:
+def _build_orchestration_proof_points(
+  scenarios: Tuple[SprintCloseScenarioResult, ...],
+) -> Tuple[SprintCloseProofPoint, ...]:
+  scenario_map = {scenario.scenario_id: scenario for scenario in scenarios}
+  no_device = scenario_map['no-device-review']
+  happy = scenario_map['happy-path-review']
+  blocked = scenario_map['blocked-preflight-review']
+  mismatch = scenario_map['incompatible-package-review']
+  failure = scenario_map['transport-failure-review']
+  resume = scenario_map['resume-handoff-review']
+
+  stable_shell = all(scenario.panel_titles == PANEL_TITLES for scenario in scenarios)
+  happy_runtime_complete = (
+    happy.phase_label == 'Completed'
+    and happy.gate_label == 'Gate Ready'
+    and happy.outcome == 'completed'
+    and happy.transport_state == 'completed'
+    and happy.transcript_preserved
+  )
+  gated_paths_hold = (
+    no_device.gate_label == 'Gate Blocked'
+    and blocked.gate_label == 'Gate Blocked'
+    and mismatch.gate_label == 'Gate Blocked'
+  )
+  failure_and_resume_preserve_runtime = (
+    failure.outcome == 'failed'
+    and failure.transport_state == 'failed'
+    and failure.transcript_preserved
+    and resume.outcome == 'completed'
+    and resume.transport_state == 'completed'
+    and resume.transcript_preserved
+  )
+  transcript_policy_holds = all(
+    scenario_map[scenario_id].transcript_policy == 'preserve_bounded_transport_transcript'
+    and scenario_map[scenario_id].transcript_line_count > 0
+    and scenario_map[scenario_id].transcript_reference_file is not None
+    for scenario_id in (
+      'happy-path-review',
+      'transport-failure-review',
+      'resume-handoff-review',
+    )
+  ) and not any(
+    scenario.transcript_preserved
+    for scenario in (no_device, blocked, mismatch)
+  )
+
+  return (
+    SprintCloseProofPoint(
+      label='Bounded runtime happy path completes from a reviewed ready state',
+      passed=happy_runtime_complete,
+      summary='The happy-path runtime lane reaches Completed / Gate Ready and preserves a bounded transport transcript reference.',
+    ),
+    SprintCloseProofPoint(
+      label='Pre-runtime trust gates still block no-device, blocked, and mismatch paths',
+      passed=gated_paths_hold,
+      summary='No-device, blocked-preflight, and incompatible-package review paths remain blocked before the bounded runtime lane opens.',
+    ),
+    SprintCloseProofPoint(
+      label='Failure and resume runtime paths remain normalized and evidence-rich',
+      passed=failure_and_resume_preserve_runtime,
+      summary='Failure and no-reboot resume paths stay platform-normalized while preserving transcript references for operator review.',
+    ),
+    SprintCloseProofPoint(
+      label='Transcript promotion stays bounded rather than dumping raw transport into summary-only evidence',
+      passed=transcript_policy_holds,
+      summary='Only adapter-invoked runtime paths carry preserved transport transcript references; review-only lanes stay summary-only.',
+    ),
+    SprintCloseProofPoint(
+      label='Shell contract remains stable across runtime and review scenarios',
+      passed=stable_shell,
+      summary='All integrated scenarios preserve the five-panel shell layout and operator-visible contract while runtime ownership increases.',
+    ),
+  )
+
+
+def _bundle_heading(bundle: SprintCloseBundle) -> str:
+  if bundle.suite_name == 'orchestration-close':
+    return '## Calamum Vulcan FS2-07 orchestration-close bundle'
+  return '## Calamum Vulcan FS-08 sprint-close bundle'
+
+
+def _carry_forward_heading(bundle: SprintCloseBundle) -> str:
+  if bundle.suite_name == 'orchestration-close':
+    return '### Carry-forward debt into 0.3.0'
+  return '### Carry-forward debt into 0.2.0'
+
+
+def _bundle_id(captured_at_utc: str, prefix: str = 'cv-fs08-sprint-close') -> str:
   stamp = captured_at_utc.replace(':', '').replace('-', '').replace('T', '-').replace('Z', '')
-  return 'cv-fs08-{stamp}-sprint-close'.format(stamp=stamp)
+  return '{prefix}-{stamp}'.format(prefix=prefix, stamp=stamp)
 
 
 def _utc_now() -> str:

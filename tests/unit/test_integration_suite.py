@@ -14,6 +14,7 @@ if str(FINAL_EXAM_ROOT) not in sys.path:
   sys.path.insert(0, str(FINAL_EXAM_ROOT))
 
 from calamum_vulcan.app.integration import build_sprint_close_bundle
+from calamum_vulcan.app.integration import build_orchestration_close_bundle
 from calamum_vulcan.app.integration import render_sprint_close_bundle_markdown
 from calamum_vulcan.app.integration import serialize_sprint_close_bundle_json
 from calamum_vulcan.app.integration import write_sprint_close_bundle
@@ -77,6 +78,31 @@ class IntegrationSuiteTests(unittest.TestCase):
     self.assertEqual(payload['suite_name'], 'sprint-close')
     self.assertEqual(payload['release_version'], '0.1.0')
     self.assertEqual(len(payload['scenarios']), 6)
+
+  def test_orchestration_close_bundle_promotes_bounded_runtime_transcripts(self) -> None:
+    bundle = build_orchestration_close_bundle(
+      captured_at_utc='2026-04-19T01:20:00Z'
+    )
+    scenario_map = {scenario.scenario_id: scenario for scenario in bundle.scenarios}
+
+    self.assertEqual(bundle.release_version, '0.2.0')
+    self.assertEqual(bundle.suite_name, 'orchestration-close')
+    self.assertTrue(all(point.passed for point in bundle.proof_points))
+    self.assertTrue(scenario_map['happy-path-review'].transcript_preserved)
+    self.assertTrue(scenario_map['transport-failure-review'].transcript_preserved)
+    self.assertTrue(scenario_map['resume-handoff-review'].transcript_preserved)
+    self.assertFalse(scenario_map['blocked-preflight-review'].transcript_preserved)
+
+  def test_orchestration_close_markdown_mentions_transcript_promotion(self) -> None:
+    bundle = build_orchestration_close_bundle(
+      captured_at_utc='2026-04-19T01:25:00Z'
+    )
+    markdown = render_sprint_close_bundle_markdown(bundle)
+
+    self.assertIn('Calamum Vulcan FS2-07 orchestration-close bundle', markdown)
+    self.assertIn('Sprint 0.2.0 closes with 5/5 orchestration-close proof points satisfied', markdown)
+    self.assertIn('summary_only', markdown)
+    self.assertIn('preserved', markdown)
 
 
 if __name__ == '__main__':

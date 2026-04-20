@@ -65,7 +65,10 @@ class PackageContractFrameOneTests(unittest.TestCase):
     launcher_path = FINAL_EXAM_ROOT / 'calamum_vulcan' / 'launch_shell.py'
     requirements_path = FINAL_EXAM_ROOT / 'calamum_vulcan' / 'requirements.txt'
 
-    self.assertEqual(fixture_names, ('matched', 'mismatched', 'incomplete'))
+    self.assertEqual(
+      fixture_names,
+      ('matched', 'mismatched', 'incomplete', 'suspicious-review'),
+    )
     for name in fixture_names:
       self.assertTrue(package_manifest_fixture_path(name).is_file())
     self.assertTrue(launcher_path.is_file())

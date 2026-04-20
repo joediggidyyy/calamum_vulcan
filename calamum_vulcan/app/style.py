@@ -176,6 +176,52 @@ def control_hint_style(scale: float = 1.0) -> str:
   )
 
 
+def detail_row_style(
+  selector: str = 'panel-detail-row',
+  scale: float = 1.0,
+) -> str:
+  """Return the style for structured panel detail rows."""
+
+  return (
+    'QFrame#{selector} {{'
+    'background-color: {surface};'
+    'border: 1px solid {line};'
+    'border-radius: {radius}px;'
+    '}}'
+    'QFrame#{selector} QLabel {{background: transparent; border: none;}}'
+  ).format(
+    selector=selector,
+    surface=COLOR_TOKENS['surface_soft'],
+    line=COLOR_TOKENS['line_soft'],
+    radius=_scaled(10, scale),
+  )
+
+
+def detail_key_style(scale: float = 1.0) -> str:
+  """Return the style for structured panel detail keys."""
+
+  return (
+    'color: {muted}; font-size: {font_size}px; font-weight: 800; '
+    'letter-spacing: 0.9px; '
+    'font-family: Consolas, "Cascadia Mono", monospace;'
+  ).format(
+    muted=COLOR_TOKENS['muted'],
+    font_size=_scaled(11, scale),
+  )
+
+
+def detail_value_style(scale: float = 1.0) -> str:
+  """Return the style for structured panel detail values."""
+
+  return (
+    'color: {text}; font-size: {font_size}px; font-weight: 600; '
+    'line-height: 1.35;'
+  ).format(
+    text=COLOR_TOKENS['text'],
+    font_size=_scaled(14, scale),
+  )
+
+
 def mono_terminal_style(scale: float = 1.0) -> str:
   """Return the style for the operational log widget."""
 

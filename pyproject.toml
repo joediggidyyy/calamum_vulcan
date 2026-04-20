@@ -53,8 +53,6 @@ Changelog = "https://github.com/joediggidyyy/calamum_vulcan/blob/main/CHANGELOG.
 
 [project.scripts]
 calamum-vulcan = "calamum_vulcan.app.__main__:main"
-
-[project.gui-scripts]
 calamum-vulcan-gui = "calamum_vulcan.app.__main__:gui_main"
 
 [tool.setuptools]
