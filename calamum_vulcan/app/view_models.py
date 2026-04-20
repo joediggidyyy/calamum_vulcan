@@ -184,7 +184,7 @@ def build_shell_view_model(
     )
   return ShellViewModel(
     title='Calamum Vulcan',
-    subtitle='Samsung operations console — Sprint 0.1.0 GUI shell',
+    subtitle='Samsung operations console — reviewed-session GUI shell',
     scenario_name=scenario_name,
     phase_label=phase_label,
     phase_tone=phase_tone,

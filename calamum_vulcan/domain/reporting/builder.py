@@ -34,6 +34,7 @@ from .model import OutcomeEvidence
 from .model import PackageEvidence
 from .model import PreflightEvidence
 from .model import REPORT_EXPORT_TARGETS
+from .model import REPORT_SCHEMA_VERSION
 from .model import SessionEvidenceReport
 from .model import TranscriptEvidence
 from .model import TransportEvidence
@@ -128,7 +129,7 @@ def build_session_evidence_report(
   )
 
   return SessionEvidenceReport(
-    schema_version='0.1.0',
+    schema_version=REPORT_SCHEMA_VERSION,
     report_id=report_id,
     captured_at_utc=captured,
     scenario_name=scenario_name,

@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 import venv
 from pathlib import Path
@@ -35,6 +36,12 @@ PYPROJECT_PATH = REPO_ROOT / 'pyproject.toml'
 TESTPYPI_REPOSITORY_URL = 'https://test.pypi.org/legacy/'
 TESTPYPI_SIMPLE_URL = 'https://test.pypi.org/simple/'
 PYPI_SIMPLE_URL = 'https://pypi.org/simple/'
+REGISTRY_INSTALL_RETRY_ATTEMPTS = 12
+REGISTRY_INSTALL_RETRY_DELAY_SECONDS = 10
+REGISTRY_INSTALL_RETRY_MARKERS = (
+  'Could not find a version that satisfies the requirement',
+  'No matching distribution found for',
+)
 
 
 def _print(lines: Sequence[str]) -> None:
@@ -72,6 +79,53 @@ def _run(
       print(result.stderr, file=sys.stderr)
     raise SystemExit(result.returncode)
   return result
+
+
+def _is_registry_install_retryable(result: subprocess.CompletedProcess[str]) -> bool:
+  """Return whether a failed registry install likely needs propagation retries."""
+
+  if result.returncode == 0:
+    return False
+  combined_output = '\n'.join(
+    part for part in (result.stdout, result.stderr) if part
+  )
+  return any(marker in combined_output for marker in REGISTRY_INSTALL_RETRY_MARKERS)
+
+
+def _run_registry_install_command(
+  command: Sequence[str],
+  cwd: Path,
+  env: Mapping[str, str],
+  progress_path: Path,
+) -> subprocess.CompletedProcess[str]:
+  """Install from TestPyPI with bounded retries for index propagation lag."""
+
+  last_result = None  # type: Optional[subprocess.CompletedProcess[str]]
+  for attempt in range(1, REGISTRY_INSTALL_RETRY_ATTEMPTS + 1):
+    result = _run(command, cwd=cwd, env=env, allow_failure=True)
+    if result.returncode == 0:
+      return result
+    last_result = result
+    if not _is_registry_install_retryable(result):
+      break
+    if attempt == REGISTRY_INSTALL_RETRY_ATTEMPTS:
+      break
+    _append_log(
+      progress_path,
+      '[registry] package not visible yet; retry {attempt}/{total} after {delay}s'.format(
+        attempt=attempt,
+        total=REGISTRY_INSTALL_RETRY_ATTEMPTS,
+        delay=REGISTRY_INSTALL_RETRY_DELAY_SECONDS,
+      ),
+    )
+    time.sleep(REGISTRY_INSTALL_RETRY_DELAY_SECONDS)
+
+  assert last_result is not None
+  if last_result.stdout:
+    print(last_result.stdout)
+  if last_result.stderr:
+    print(last_result.stderr, file=sys.stderr)
+  raise SystemExit(last_result.returncode)
 
 
 def _load_dotenv(path: Path) -> None:
@@ -292,7 +346,12 @@ def _run_registry_install_validation(
   _append_log(progress_path, '[registry] create clean environment')
   _run([str(python_path), '-m', 'pip', '--version'], cwd=validation_root, env=install_env)
   _append_log(progress_path, '[registry] install from TestPyPI + PyPI dependency index')
-  install_result = _run(install_command, cwd=validation_root, env=install_env)
+  install_result = _run_registry_install_command(
+    install_command,
+    cwd=validation_root,
+    env=install_env,
+    progress_path=progress_path,
+  )
   _write_text(validation_root / 'registry_install_stdout.txt', install_result.stdout)
   _write_text(validation_root / 'registry_install_stderr.txt', install_result.stderr)
 

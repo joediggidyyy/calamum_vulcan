@@ -4,7 +4,7 @@ Samsung-focused open-source Android flashing platform with GUI-first workflows, 
 
 ## Current status
 
-`0.1.0` product-shell work is complete, empirical/public-doc review is closed, and the first public release is now live on PyPI and GitHub.
+`0.2.0` is the current packaged-and-pushed release boundary in this repository. The latest publicly published registry/release boundary remains `0.1.0` until the `0.2.0` publication lane is executed.
 
 Current release posture:
 
@@ -12,7 +12,9 @@ Current release posture:
 - release root: this repository root
 - validated source-checkout runtime: Python `3.14`
 - license: MIT
-- current publication state: `0.1.0` published to PyPI and released on GitHub
+- current repository package version: `0.2.0`
+- current push boundary: `v0.2.0` on the nested release repo
+- latest public PyPI/GitHub release: `0.1.0`
 - live PyPI project: `https://pypi.org/project/calamum-vulcan/`
 - live GitHub release: `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.1.0`
 
@@ -28,7 +30,7 @@ Representative commands:
 
 - `python -m unittest discover -s tests/unit -p "test_*.py"`
 - `python calamum_vulcan/launch_shell.py --scenario ready --describe-only`
-- `python -m calamum_vulcan.app --integration-suite sprint-close --suite-format markdown --suite-output temp/fs08_sprint_close.md`
+- `python -m calamum_vulcan.app --integration-suite orchestration-close --suite-format markdown --suite-output temp/fs2_07_orchestration_close.md`
 
 ## Installed-artifact quickstart
 
@@ -41,10 +43,10 @@ For a release-style review from the built wheel:
 Representative commands:
 
 - `python scripts/build_release_artifacts.py`
-- `python -m pip install dist/calamum_vulcan-0.1.0-py3-none-any.whl`
+- `python -m pip install dist/calamum_vulcan-0.2.0-py3-none-any.whl`
 - `calamum-vulcan --scenario ready --describe-only`
 - `calamum-vulcan --scenario blocked --describe-only --export-evidence --evidence-format markdown --evidence-output blocked_review.md`
-- `calamum-vulcan-gui --scenario ready`
+- `calamum-vulcan-gui`
 
 ## Packaging and build
 
@@ -77,7 +79,7 @@ The publication rehearsal accepts TestPyPI credentials from the release-root `.e
 
 ## Installed entry points
 
-The packaging contract for `0.1.0` defines these installed entry points:
+The packaging contract for `0.2.0` defines these installed entry points:
 
 - `calamum-vulcan` — console entry point for CLI review flows and GUI launch
 - `calamum-vulcan-gui` — console-visible GUI launcher entry point
@@ -106,19 +108,19 @@ Calamum Vulcan is currently focused on Samsung-first flashing workflows with:
 - GUI-first operator flows
 - package-aware preflight gating
 - structured session evidence
-- a bounded Heimdall adapter seam for the `0.1.0` product shell
+- a bounded Heimdall adapter seam for reviewed runtime execution
 - bounded ADB/Fastboot companion controls for detection and reboot handoffs
 
-## Support posture for `0.1.0`
+## Support posture for `0.2.0`
 
-| Surface                 | `0.1.0` posture                                                   |
+| Surface                 | `0.2.0` posture                                                   |
 | ----------------------- | ----------------------------------------------------------------- |
 | Windows packaged build  | empirically reviewed                                              |
 | Linux packaged build    | scripted-simulation target only; empirical closeout still pending |
-| macOS                   | deferred and outside the published `0.1.0` support boundary       |
+| macOS                   | deferred and outside the published `0.2.0` support boundary       |
 | Core flashing workflow  | simulation-validated                                              |
 | Live companion controls | bounded lab review only for device detection and reboot handoffs  |
-| Live firmware flashing  | not part of the published `0.1.0` support boundary                |
+| Live firmware flashing  | not part of the published `0.2.0` support boundary                |
 
 ## Known limitations
 
@@ -126,7 +128,7 @@ Calamum Vulcan is currently focused on Samsung-first flashing workflows with:
 | --------------------- | ------------------------------------------------------------------------------------------------------------- |
 | Transport execution   | the published flashing workflow remains fixture-backed rather than live-subprocess-backed                     |
 | PIT operator controls | PIT download and print capabilities exist at the adapter seam but are not yet exposed as public shell actions |
-| Host matrix           | Windows is the only empirically reviewed packaged host for `0.1.0`                                            |
+| Host matrix           | Windows is the only empirically reviewed packaged host for `0.2.0`                                            |
 | Qt deployment         | Qt font packaging still emits a warning in some review environments                                           |
 
 ## Troubleshooting
@@ -136,9 +138,9 @@ Calamum Vulcan is currently focused on Samsung-first flashing workflows with:
 | `calamum-vulcan` will not launch              | wrong interpreter or missing runtime dependency                                                 | use Python `3.14` and reinstall the wheel so `PySide6>=6.8,<7` is present                                                |
 | GUI opens without branded assets              | stale wheel built before the branding assets were packaged                                      | rebuild with `python scripts/build_release_artifacts.py` and reinstall the fresh wheel                                   |
 | No device appears in the live companion panel | device is not in the expected mode, ADB is not authorized, or Windows driver state is not ready | re-enter the correct device mode, authorize ADB if applicable, and review the Windows USB/driver posture before retrying |
-| Qt prints a font warning during review        | known `0.1.0` packaging debt                                                                    | treat it as a non-blocking warning for now; the shell remains usable while the font-packaging lane is hardened           |
+| Qt prints a font warning during review        | known `0.2.0` packaging debt                                                                    | treat it as a non-blocking warning for now; the shell remains usable while the font-packaging lane is hardened           |
 | Evidence file was not written where expected  | output path or permissions are wrong                                                            | choose a writable output path and rerun the export command                                                               |
 
 ## Release note
 
-`calamum-vulcan==0.1.0` is now published on PyPI and was verified from the live index in a clean temporary virtual environment, including help output, ready-state describe-only review, blocked evidence export, sprint-close bundle generation, uninstall, and reinstall.
+`calamum-vulcan==0.2.0` is the current source/package boundary for this repository and is validated through local build, installed-artifact, scripted-simulation, and empirical-review gates before push. The last public registry/release publication still points at `0.1.0`.

@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -54,13 +55,34 @@ GUI_REVIEW_SCENARIOS = (
   },
 )
 
+
+def _project_version() -> str:
+  """Return the current repository package version."""
+
+  with (REPO_ROOT / 'pyproject.toml').open('rb') as handle:
+    project = tomllib.load(handle)['project']
+  return str(project['version'])
+
+
+CURRENT_PACKAGE_VERSION = _project_version()
+
 PUBLIC_SUPPORT_POSTURE = {
-  'windows': 'empirically reviewed in packaged form for 0.1.0',
-  'linux': 'scripted-simulation target only for 0.1.0; empirical closeout still pending',
-  'macos': 'deferred and not part of the 0.1.0 published support boundary',
-  'core_flash_workflow': 'simulation-validated for the 0.1.0 package boundary',
+  'windows': 'empirically reviewed in packaged form for {version}'.format(
+    version=CURRENT_PACKAGE_VERSION,
+  ),
+  'linux': 'scripted-simulation target only for {version}; empirical closeout still pending'.format(
+    version=CURRENT_PACKAGE_VERSION,
+  ),
+  'macos': 'deferred and not part of the {version} published support boundary'.format(
+    version=CURRENT_PACKAGE_VERSION,
+  ),
+  'core_flash_workflow': 'simulation-validated for the {version} package boundary'.format(
+    version=CURRENT_PACKAGE_VERSION,
+  ),
   'live_companion_controls': 'bounded lab review only for device detection and reboot handoffs',
-  'live_firmware_flashing': 'not part of the published 0.1.0 support boundary',
+  'live_firmware_flashing': 'not part of the published {version} support boundary'.format(
+    version=CURRENT_PACKAGE_VERSION,
+  ),
 }
 
 
@@ -353,7 +375,9 @@ def _write_summary_markdown(
     '- evidence review: blocked and failure Markdown exports remained readable and recovery-oriented',
     '- GUI review: screenshots captured for ready, blocked, and failure packaged scenarios',
     '',
-    '### Support posture pinned for `0.1.0`',
+    '### Support posture pinned for `{version}`'.format(
+      version=CURRENT_PACKAGE_VERSION,
+    ),
     '',
   ]
   for label, value in PUBLIC_SUPPORT_POSTURE.items():

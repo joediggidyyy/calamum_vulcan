@@ -10,7 +10,7 @@ from typing import Optional
 from typing import Tuple
 
 
-REPORT_SCHEMA_VERSION = '0.1.0'
+REPORT_SCHEMA_VERSION = '0.2.0'
 REPORT_EXPORT_TARGETS = ('json', 'markdown')
 
 REQUIRED_SESSION_REPORT_FIELDS = (

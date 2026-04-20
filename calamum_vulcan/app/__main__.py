@@ -165,7 +165,7 @@ def _build_argument_parser() -> argparse.ArgumentParser:
   """Create the Calamum Vulcan command-line parser."""
 
   parser = argparse.ArgumentParser(
-    description='Launch the Calamum Vulcan Sprint 0.1.0 GUI shell.'
+    description='Launch the Calamum Vulcan GUI shell.'
   )
   parser.add_argument(
     '-v',

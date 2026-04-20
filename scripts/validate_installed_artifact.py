@@ -90,8 +90,8 @@ required = [
   'calamum_vulcan/fixtures/package_manifests/mismatched_recovery_package.json',
   'calamum_vulcan/fixtures/package_manifests/incomplete_recovery_package.json',
   'calamum_vulcan/fixtures/package_manifests/suspicious_review_package.json',
-  'calamum_vulcan-0.1.0.dist-info/METADATA',
-  'calamum_vulcan-0.1.0.dist-info/entry_points.txt',
+  '.dist-info/METADATA',
+  '.dist-info/entry_points.txt',
 ]
 missing = [item for item in required if not any(name.endswith(item) for name in file_names)]
 if missing:

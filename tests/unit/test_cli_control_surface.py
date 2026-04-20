@@ -17,6 +17,10 @@ FINAL_EXAM_ROOT = Path(__file__).resolve().parents[2]
 if str(FINAL_EXAM_ROOT) not in sys.path:
   sys.path.insert(0, str(FINAL_EXAM_ROOT))
 
+PROJECT_VERSION = tomllib.loads(
+  (FINAL_EXAM_ROOT / 'pyproject.toml').read_text(encoding='utf-8')
+)['project']['version']
+
 from calamum_vulcan.app.__main__ import gui_main
 from calamum_vulcan.app.__main__ import main
 from calamum_vulcan.app.__main__ import _render_codesentinel_status_block
@@ -35,7 +39,7 @@ class CliControlSurfaceTests(unittest.TestCase):
 
         output = stream.getvalue()
         self.assertEqual(exit_signal.exception.code, 0)
-        self.assertIn('Calamum Vulcan 0.1.0', output)
+        self.assertIn('Calamum Vulcan {version}'.format(version=PROJECT_VERSION), output)
 
   def test_describe_only_adb_download_reboot_surfaces_vendor_specific_note(self) -> None:
     stream = io.StringIO()
@@ -82,7 +86,7 @@ class CliControlSurfaceTests(unittest.TestCase):
   def test_gui_main_surfaces_help_and_version_when_console_missing(self) -> None:
     for flag, expected_title, expected_text in (
       ('-h', 'help', 'usage:'),
-      ('--version', 'version', 'Calamum Vulcan 0.1.0'),
+      ('--version', 'version', 'Calamum Vulcan {version}'.format(version=PROJECT_VERSION)),
     ):
       with self.subTest(flag=flag):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -149,7 +153,7 @@ class CliControlSurfaceTests(unittest.TestCase):
 
     output = stream.getvalue()
     self.assertEqual(exit_code, 0)
-    self.assertIn('Calamum Vulcan 0.1.0', output)
+    self.assertIn('Calamum Vulcan {version}'.format(version=PROJECT_VERSION), output)
 
   def test_gui_main_detaches_interactive_launch_without_exit_status_echo(self) -> None:
     stream = io.StringIO()
