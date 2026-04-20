@@ -23,6 +23,8 @@ Second packaged Calamum Vulcan release boundary, extending the public shell with
 
 - `.venv-core` package validation reran successfully for build, Twine metadata, installed-artifact, scripted-simulation, and empirical-review gates
 - the packaged launcher behavior was revalidated after the detached-launch/no-duplicate-echo fix
+- live PyPI publication completed for `calamum-vulcan==0.2.0`
+- live GitHub release published at `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.2.0`
 
 ### Known limitations
 

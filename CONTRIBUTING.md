@@ -53,7 +53,7 @@ Use the private reporting guidance in `SECURITY.md`.
 
 ## Scope discipline
 
-For `0.1.0` publication work:
+For current `0.2.x` publication work:
 
 - keep the GUI-first shell contract intact
 - keep `.venv-core` as the default validated runtime

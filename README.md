@@ -4,7 +4,7 @@ Samsung-focused open-source Android flashing platform with GUI-first workflows, 
 
 ## Current status
 
-`0.2.0` is the current packaged-and-pushed release boundary in this repository. The latest publicly published registry/release boundary remains `0.1.0` until the `0.2.0` publication lane is executed.
+`0.2.0` is now the current public Calamum Vulcan release on both PyPI and GitHub.
 
 Current release posture:
 
@@ -14,9 +14,9 @@ Current release posture:
 - license: MIT
 - current repository package version: `0.2.0`
 - current push boundary: `v0.2.0` on the nested release repo
-- latest public PyPI/GitHub release: `0.1.0`
+- latest public PyPI/GitHub release: `0.2.0`
 - live PyPI project: `https://pypi.org/project/calamum-vulcan/`
-- live GitHub release: `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.1.0`
+- live GitHub release: `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.2.0`
 
 ## Source checkout quickstart
 
@@ -146,4 +146,4 @@ Calamum Vulcan is currently focused on Samsung-first flashing workflows with:
 
 ## Release note
 
-`calamum-vulcan==0.2.0` is the current source/package boundary for this repository and is validated through local build, installed-artifact, scripted-simulation, and empirical-review gates before push. The last public registry/release publication still points at `0.1.0`.
+`calamum-vulcan==0.2.0` is now published on PyPI and released on GitHub. The public boundary was validated through local build, installed-artifact checks, TestPyPI rehearsal, and the release-lane automation described above.
