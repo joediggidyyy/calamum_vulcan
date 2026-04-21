@@ -52,6 +52,8 @@ Release-maintainer rules:
 - bind it to the GitHub Actions environment `pypi`
 - treat the secret value as a PyPI API token, not a username/password pair
 - keep `attestations: false` while the workflow is using token-backed upload instead of Trusted Publishing
+- rerunning an old release job uses the workflow file frozen at that tag's commit, not the latest workflow on `main`
+- use the workflow's manual dispatch from `main` with `source_ref=refs/tags/vX.Y.Z` when you need to replay publication logic against an existing release tag
 
 Context for this decision:
 

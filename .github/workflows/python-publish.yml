@@ -11,6 +11,12 @@ name: Upload Python Package
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Git ref to build and publish with the current workflow file
+        required: true
+        default: refs/heads/main
 
 permissions:
   contents: read
@@ -20,7 +26,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Release-tag reruns execute the workflow as frozen at the tagged commit.
+      # Use workflow_dispatch from main with source_ref=refs/tags/vX.Y.Z to replay
+      # publication with the current workflow logic and environment secrets.
       - uses: actions/checkout@v4
+        if: github.event_name != 'workflow_dispatch'
+
+      - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          ref: ${{ inputs.source_ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -59,9 +74,21 @@ jobs:
           path: dist/
 
       - name: Publish release distributions to PyPI
+        if: github.event_name != 'workflow_dispatch'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           user: __token__
           password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: dist/
           attestations: false
+
+      - name: Publish release distributions to PyPI (manual rerun)
+        if: github.event_name == 'workflow_dispatch'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          packages-dir: dist/
+          attestations: false
+          skip-existing: true
+          print-hash: true
