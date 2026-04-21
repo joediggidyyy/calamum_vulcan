@@ -36,6 +36,30 @@ The installed-artifact runner is the repeatable clean-environment smoke and pack
 
 The scripted simulation runner is the repeatable release-root and installed-artifact scenario matrix, offscreen GUI, and deterministic evidence-export check for `FS-P04`.
 
+## PyPI publication workflow
+
+The release-triggered GitHub Actions publisher lives at:
+
+- `.github/workflows/python-publish.yml`
+
+The current production workflow publishes with the `pypi` environment secret:
+
+- `PYPI_API_TOKEN`
+
+Release-maintainer rules:
+
+- keep `PYPI_API_TOKEN` project-scoped to `calamum-vulcan`
+- bind it to the GitHub Actions environment `pypi`
+- treat the secret value as a PyPI API token, not a username/password pair
+- keep `attestations: false` while the workflow is using token-backed upload instead of Trusted Publishing
+
+Context for this decision:
+
+- the unchanged Trusted Publishing workflow failed for both the `v0.2.0` and `v0.3.0` release runs with PyPI `invalid-publisher`
+- the package itself was still publishable with the existing project-scoped PyPI token
+
+If Trusted Publishing is reintroduced later, remove the explicit token input, restore the job-level `id-token: write` permission, and re-enable attestations only after the PyPI publisher record is confirmed to match the workflow.
+
 ## Documentation discipline
 
 Keep public-facing docs:
