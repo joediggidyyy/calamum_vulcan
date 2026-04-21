@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import stat
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -45,6 +46,29 @@ class SecurityValidationTests(unittest.TestCase):
       with self.assertRaises(UnsafeArchiveMemberError):
         safe_extract_zip_archive(archive_path, output_root)
 
+  def test_safe_extract_zip_archive_blocks_drive_qualified_member(self) -> None:
+    with TemporaryDirectory() as temp_dir:
+      archive_path = Path(temp_dir) / 'drive-qualified.zip'
+      output_root = Path(temp_dir) / 'out'
+      with zipfile.ZipFile(archive_path, 'w') as archive:
+        archive.writestr('C:/escape.txt', 'bad')
+
+      with self.assertRaises(UnsafeArchiveMemberError):
+        safe_extract_zip_archive(archive_path, output_root)
+
+  def test_safe_extract_zip_archive_blocks_symbolic_link_member(self) -> None:
+    with TemporaryDirectory() as temp_dir:
+      archive_path = Path(temp_dir) / 'symlink.zip'
+      output_root = Path(temp_dir) / 'out'
+      link_info = zipfile.ZipInfo('pkg/link-to-secret')
+      link_info.create_system = 3
+      link_info.external_attr = (stat.S_IFLNK | 0o777) << 16
+      with zipfile.ZipFile(archive_path, 'w') as archive:
+        archive.writestr(link_info, 'secret.txt')
+
+      with self.assertRaises(UnsafeArchiveMemberError):
+        safe_extract_zip_archive(archive_path, output_root)
+
   def test_security_validation_suite_passes_without_blocking_findings(self) -> None:
     summary = run_security_validation_suite(FINAL_EXAM_ROOT)
     checks = {check.name: check for check in summary.checks}
@@ -53,11 +77,16 @@ class SecurityValidationTests(unittest.TestCase):
     self.assertEqual(checks['dangerous_python_patterns'].status, 'passed')
     self.assertEqual(checks['companion_process_timeout'].status, 'passed')
     self.assertEqual(checks['heimdall_process_timeout'].status, 'passed')
+    self.assertEqual(checks['live_device_read_side_truth'].status, 'passed')
+    self.assertEqual(checks['pit_read_side_truth'].status, 'passed')
     self.assertEqual(checks['device_registry_truth'].status, 'passed')
     self.assertEqual(checks['flash_plan_review_surface'].status, 'passed')
     self.assertEqual(checks['android_image_heuristics'].status, 'passed')
     self.assertEqual(checks['runtime_session_loop'].status, 'passed')
+    self.assertEqual(checks['inspect_only_evidence_contract'].status, 'passed')
+    self.assertEqual(checks['fallback_visibility_contract'].status, 'passed')
     self.assertEqual(checks['transport_transcript_promotion'].status, 'passed')
+    self.assertEqual(checks['gui_runtime_log_boundary'].status, 'passed')
     self.assertIn(checks['checksum_placeholders'].status, ('warn', 'passed'))
 
 

@@ -53,9 +53,10 @@ Use the private reporting guidance in `SECURITY.md`.
 
 ## Scope discipline
 
-For current `0.2.x` publication work:
+For current `0.3.x` closeout and publication work:
 
 - keep the GUI-first shell contract intact
 - keep `.venv-core` as the default validated runtime
 - treat Qt font warnings as packaging debt, not functional test failures
-- do not imply live-device support beyond what has actually been validated
+- do not imply native read-side ownership beyond the reviewed Samsung subset that was actually validated
+- do not imply public live firmware flashing support that has not been validated

@@ -255,6 +255,31 @@ class CliControlSurfaceTests(unittest.TestCase):
       self.assertTrue(payload['inspection']['pit_ran'])
       self.assertTrue(payload['outcome']['export_ready'])
 
+  def test_read_side_close_bundle_serializes_from_cli(self) -> None:
+    stream = io.StringIO()
+
+    with redirect_stdout(stream):
+      exit_code = main(
+        [
+          '--integration-suite', 'read-side-close',
+          '--suite-format', 'json',
+          '--captured-at-utc', '2026-04-20T23:20:00Z',
+        ]
+      )
+
+    payload = json.loads(stream.getvalue())
+    scenario_map = {scenario['scenario_id']: scenario for scenario in payload['scenarios']}
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(payload['suite_name'], 'read-side-close')
+    self.assertEqual(payload['release_version'], '0.3.0')
+    self.assertEqual(scenario_map['inspect-only-ready-review']['inspection_posture'], 'ready')
+    self.assertEqual(scenario_map['fastboot-fallback-review']['live_source'], 'fastboot')
+    self.assertEqual(
+      scenario_map['fallback-exhausted-review']['inspection_posture'],
+      'failed',
+    )
+
   def test_gui_main_survives_missing_console_streams(self) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
       log_path = Path(temp_dir) / 'gui_startup.log'

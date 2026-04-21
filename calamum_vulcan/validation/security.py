@@ -37,6 +37,18 @@ PACKAGE_IMPORTER_PATH = (
 ANALYZED_SNAPSHOT_PATH = (
   Path(__file__).resolve().parents[1] / 'domain' / 'package' / 'snapshot.py'
 )
+LIVE_DEVICE_BUILDER_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'live_device' / 'builder.py'
+)
+LIVE_DEVICE_MODEL_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'live_device' / 'model.py'
+)
+PIT_BUILDER_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'pit' / 'builder.py'
+)
+PIT_MODEL_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'pit' / 'model.py'
+)
 DEVICE_REGISTRY_PATH = (
   Path(__file__).resolve().parents[1] / 'domain' / 'device_registry' / 'registry.py'
 )
@@ -52,8 +64,23 @@ STATE_RUNTIME_PATH = (
 HEIMDALL_RUNTIME_PATH = (
   Path(__file__).resolve().parents[1] / 'adapters' / 'heimdall' / 'runtime.py'
 )
+INSPECTION_WORKFLOW_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'state' / 'inspection.py'
+)
+APP_MAIN_PATH = (
+  Path(__file__).resolve().parents[1] / 'app' / '__main__.py'
+)
+REPORTING_BUILDER_PATH = (
+  Path(__file__).resolve().parents[1] / 'domain' / 'reporting' / 'builder.py'
+)
 REPORTING_MODEL_PATH = (
   Path(__file__).resolve().parents[1] / 'domain' / 'reporting' / 'model.py'
+)
+LAUNCH_SHELL_PATH = (
+  Path(__file__).resolve().parents[1] / 'launch_shell.py'
+)
+QT_SHELL_PATH = (
+  Path(__file__).resolve().parents[1] / 'app' / 'qt_shell.py'
 )
 
 
@@ -156,11 +183,16 @@ def run_security_validation_suite(repo_root: Path) -> SecurityValidationSummary:
     _checksum_placeholder_check(),
     _package_importer_check(),
     _analyzed_snapshot_check(),
+    _live_device_read_side_check(),
+    _pit_read_side_check(),
     _device_registry_check(),
     _flash_plan_check(),
     _image_heuristics_check(),
     _runtime_session_loop_check(),
+    _inspect_only_evidence_contract_check(),
+    _fallback_visibility_contract_check(),
     _transcript_promotion_check(),
+    _gui_runtime_log_boundary_check(),
   )
   blocking_findings = tuple(
     detail
@@ -329,6 +361,56 @@ def _analyzed_snapshot_check() -> SecurityCheckResult:
   )
 
 
+def _live_device_read_side_check() -> SecurityCheckResult:
+  builder_text = _read_text(LIVE_DEVICE_BUILDER_PATH)
+  model_text = _read_text(LIVE_DEVICE_MODEL_PATH)
+  if (
+    'def build_live_detection_session(' in builder_text
+    and 'def apply_live_device_info_trace(' in builder_text
+    and 'class LiveDetectionSession' in model_text
+    and 'class LiveDeviceSnapshot' in model_text
+  ):
+    return SecurityCheckResult(
+      name='live_device_read_side_truth',
+      status='passed',
+      summary='Repo-owned live detection and bounded info-capture surfaces exist for read-side review.',
+      details=(
+        LIVE_DEVICE_BUILDER_PATH.as_posix(),
+        LIVE_DEVICE_MODEL_PATH.as_posix(),
+      ),
+    )
+  return SecurityCheckResult(
+    name='live_device_read_side_truth',
+    status='warn',
+    summary='Repo-owned live detection and bounded info-capture surfaces are not fully pinned yet.',
+  )
+
+
+def _pit_read_side_check() -> SecurityCheckResult:
+  builder_text = _read_text(PIT_BUILDER_PATH)
+  model_text = _read_text(PIT_MODEL_PATH)
+  reporting_text = _read_text(REPORTING_MODEL_PATH)
+  if (
+    'def build_pit_inspection(' in builder_text
+    and 'class PitInspection' in model_text
+    and 'class PitEvidence' in reporting_text
+  ):
+    return SecurityCheckResult(
+      name='pit_read_side_truth',
+      status='passed',
+      summary='Repo-owned PIT parsing and evidence surfaces exist for read-side inspection review.',
+      details=(
+        PIT_BUILDER_PATH.as_posix(),
+        PIT_MODEL_PATH.as_posix(),
+      ),
+    )
+  return SecurityCheckResult(
+    name='pit_read_side_truth',
+    status='warn',
+    summary='Repo-owned PIT parsing or evidence surfaces are not fully pinned yet.',
+  )
+
+
 def _device_registry_check() -> SecurityCheckResult:
   if DEVICE_REGISTRY_PATH.exists():
     return SecurityCheckResult(
@@ -393,6 +475,59 @@ def _runtime_session_loop_check() -> SecurityCheckResult:
   )
 
 
+def _inspect_only_evidence_contract_check() -> SecurityCheckResult:
+  inspection_text = _read_text(INSPECTION_WORKFLOW_PATH)
+  app_main_text = _read_text(APP_MAIN_PATH)
+  reporting_text = _read_text(REPORTING_MODEL_PATH)
+  reporting_builder_text = _read_text(REPORTING_BUILDER_PATH)
+  if (
+    'def build_inspection_workflow(' in inspection_text
+    and '--inspect-device' in app_main_text
+    and 'class InspectionWorkflowEvidence' in reporting_text
+    and 'inspection=inspection' in reporting_builder_text
+  ):
+    return SecurityCheckResult(
+      name='inspect_only_evidence_contract',
+      status='passed',
+      summary='Inspect-only workflow posture and evidence export surfaces remain explicit and read-side only.',
+      details=(
+        INSPECTION_WORKFLOW_PATH.as_posix(),
+        APP_MAIN_PATH.as_posix(),
+      ),
+    )
+  return SecurityCheckResult(
+    name='inspect_only_evidence_contract',
+    status='warn',
+    summary='Inspect-only workflow posture or evidence export surfaces are not fully pinned yet.',
+  )
+
+
+def _fallback_visibility_contract_check() -> SecurityCheckResult:
+  live_model_text = _read_text(LIVE_DEVICE_MODEL_PATH)
+  pit_model_text = _read_text(PIT_MODEL_PATH)
+  reporting_builder_text = _read_text(REPORTING_BUILDER_PATH)
+  if (
+    'class LiveFallbackPosture' in live_model_text
+    and 'class PitFallbackPosture' in pit_model_text
+    and 'fallback_posture=live_detection.fallback_posture.value' in reporting_builder_text
+    and 'fallback_posture=pit_inspection.fallback_posture.value' in reporting_builder_text
+  ):
+    return SecurityCheckResult(
+      name='fallback_visibility_contract',
+      status='passed',
+      summary='Fallback posture remains an explicit evidence field for both live detection and PIT review surfaces.',
+      details=(
+        LIVE_DEVICE_MODEL_PATH.as_posix(),
+        PIT_MODEL_PATH.as_posix(),
+      ),
+    )
+  return SecurityCheckResult(
+    name='fallback_visibility_contract',
+    status='warn',
+    summary='Fallback posture is not yet fully visible across the read-side evidence surfaces.',
+  )
+
+
 def _transcript_promotion_check() -> SecurityCheckResult:
   if (
     REPORTING_MODEL_PATH.exists()
@@ -408,6 +543,31 @@ def _transcript_promotion_check() -> SecurityCheckResult:
     name='transport_transcript_promotion',
     status='warn',
     summary='Transport transcript promotion is still summary-only and lacks an explicit reporting contract.',
+  )
+
+
+def _gui_runtime_log_boundary_check() -> SecurityCheckResult:
+  launch_text = _read_text(LAUNCH_SHELL_PATH)
+  qt_text = _read_text(QT_SHELL_PATH)
+  if (
+    'calamum_vulcan_gui_runtime.log' in launch_text
+    and 'tempfile.gettempdir()' in launch_text
+    and 'calamum_vulcan_gui_runtime.log' in qt_text
+    and 'tempfile.gettempdir()' in qt_text
+  ):
+    return SecurityCheckResult(
+      name='gui_runtime_log_boundary',
+      status='passed',
+      summary='GUI runtime diagnostics are written to temp-file boundaries instead of repo-owned paths.',
+      details=(
+        LAUNCH_SHELL_PATH.as_posix(),
+        QT_SHELL_PATH.as_posix(),
+      ),
+    )
+  return SecurityCheckResult(
+    name='gui_runtime_log_boundary',
+    status='warn',
+    summary='GUI runtime diagnostics are not yet pinned to an explicit temp-file boundary.',
   )
 
 
@@ -485,6 +645,13 @@ def _module_integer_constant(file_path: Path, constant_name: str) -> int:
         if isinstance(node.value, ast.Constant) and isinstance(node.value.value, int):
           return node.value.value
   return 0
+
+
+def _read_text(file_path: Path) -> str:
+  try:
+    return file_path.read_text(encoding='utf-8')
+  except OSError:
+    return ''
 
 
 def _zip_info_is_symlink(member: zipfile.ZipInfo) -> bool:

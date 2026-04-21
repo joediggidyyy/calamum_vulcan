@@ -43,6 +43,7 @@ from .demo import build_demo_session
 from .demo import scenario_label
 from .integration import available_integration_suites
 from .integration import build_orchestration_close_bundle
+from .integration import build_read_side_close_bundle
 from .integration import build_sprint_close_bundle
 from .integration import render_sprint_close_bundle_markdown
 from .integration import serialize_sprint_close_bundle_json
@@ -169,10 +170,14 @@ def _fallback_project_version() -> str:
 def _application_version() -> str:
   """Return the installed package version or a source-tree fallback."""
 
+  fallback_version = _fallback_project_version()
   try:
-    return metadata.version(PACKAGE_DISTRIBUTION_NAME)
+    installed_version = metadata.version(PACKAGE_DISTRIBUTION_NAME)
   except metadata.PackageNotFoundError:
-    return _fallback_project_version()
+    return fallback_version
+  if fallback_version != 'unknown':
+    return fallback_version
+  return installed_version
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
@@ -375,18 +380,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     '--integration-suite',
     choices=available_integration_suites(),
     default=None,
-    help='Run the FS-08 integrated sprint-close bundle instead of one scenario.',
+    help='Run one integrated closeout bundle instead of one scenario.',
   )
   parser.add_argument(
     '--suite-format',
     choices=REPORT_EXPORT_TARGETS,
     default='markdown',
-    help='Choose how the FS-08 integrated bundle should be rendered.',
+    help='Choose how the integrated closeout bundle should be rendered.',
   )
   parser.add_argument(
     '--suite-output',
     default=None,
-    help='Optional path to write the FS-08 integrated bundle.',
+    help='Optional path to write the integrated closeout bundle.',
   )
   parser.add_argument(
     '--export-evidence',
@@ -462,6 +467,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     bundle = build_sprint_close_bundle(captured_at_utc=args.captured_at_utc)
   elif args.integration_suite == 'orchestration-close':
     bundle = build_orchestration_close_bundle(captured_at_utc=args.captured_at_utc)
+  elif args.integration_suite == 'read-side-close':
+    bundle = build_read_side_close_bundle(captured_at_utc=args.captured_at_utc)
   if bundle is not None:
     if args.suite_output:
       output_path = write_sprint_close_bundle(

@@ -424,6 +424,39 @@ def main() -> int:
     scenario['transcript_preserved'] for scenario in runtime_scenarios
   ):
     raise SystemExit('Installed orchestration-close bundle did not preserve transcript references for runtime scenarios.')
+
+  read_side_bundle_path = output_dir / 'read_side_close_bundle.json'
+  _run(
+    [
+      sys.executable,
+      '-c', _cli_probe_code(install_root),
+      '--integration-suite', 'read-side-close',
+      '--suite-format', 'json',
+      '--suite-output', str(read_side_bundle_path),
+    ],
+    cwd=work_dir,
+  )
+  read_side_bundle = _read_json(read_side_bundle_path)
+  if read_side_bundle['suite_name'] != 'read-side-close':
+    raise SystemExit('Installed read-side-close bundle lost the expected suite name.')
+  scenario_map = {
+    scenario['scenario_id']: scenario for scenario in read_side_bundle['scenarios']
+  }
+  inspect_ready = scenario_map.get('inspect-only-ready-review')
+  native_review = scenario_map.get('native-adb-package-review')
+  fastboot_fallback = scenario_map.get('fastboot-fallback-review')
+  fallback_exhausted = scenario_map.get('fallback-exhausted-review')
+  if inspect_ready is None or inspect_ready['inspection_posture'] != 'ready':
+    raise SystemExit('Installed read-side-close bundle did not preserve the ready inspect-only posture.')
+  if inspect_ready['transport_state'] != 'not_invoked' or inspect_ready['transcript_preserved'] is not False:
+    raise SystemExit('Installed read-side-close bundle lost the read-side-only non-transport posture.')
+  if native_review is None or native_review['live_source'] != 'adb' or native_review['pit_package_alignment'] != 'matched':
+    raise SystemExit('Installed read-side-close bundle did not preserve the native ADB matched-alignment lane.')
+  if fastboot_fallback is None or fastboot_fallback['live_source'] != 'fastboot' or fastboot_fallback['live_fallback_posture'] != 'engaged':
+    raise SystemExit('Installed read-side-close bundle did not preserve the fastboot fallback posture.')
+  if fallback_exhausted is None or fallback_exhausted['inspection_posture'] != 'failed':
+    raise SystemExit('Installed read-side-close bundle did not preserve the exhausted fallback failure lane.')
+
   security_summary = run_security_validation_suite(REPO_ROOT)
   write_security_validation_artifacts(
     VALIDATION_ROOT / 'security_validation',
@@ -448,6 +481,7 @@ def main() -> int:
       'suspicious_review="passed"',
       'evidence_export="passed"',
       'integration_bundle="passed"',
+      'read_side_close_bundle="passed"',
       'distribution_files="passed"',
       'installed_artifact_contract="passed"',
     ]

@@ -7,6 +7,7 @@ from datetime import timezone
 import json
 from pathlib import Path
 import platform
+import re
 import sys
 from typing import Iterable
 from typing import Optional
@@ -47,6 +48,10 @@ from .model import REPORT_SCHEMA_VERSION
 from .model import SessionEvidenceReport
 from .model import TranscriptEvidence
 from .model import TransportEvidence
+
+
+SAFE_FILE_COMPONENT_PATTERN = re.compile(r'[^A-Za-z0-9._-]+')
+SAFE_DOT_RUN_PATTERN = re.compile(r'\.{2,}')
 
 
 def build_session_evidence_report(
@@ -491,8 +496,13 @@ def write_session_evidence_report(
   output_path.parent.mkdir(parents=True, exist_ok=True)
   output_path.write_text(content, encoding='utf-8')
   if transport_trace is not None and report.transcript.preserved:
+    fallback_name = output_path.stem + '.transport.log'
+    reference_name = _safe_reference_file_name(
+      report.transcript.reference_file_name,
+      fallback_name=fallback_name,
+    )
     transcript_path = output_path.parent / (
-      report.transcript.reference_file_name or (output_path.stem + '.transport.log')
+      reference_name
     )
     transcript_path.write_text(
       render_transport_transcript_text(report, transport_trace),
@@ -1502,10 +1512,13 @@ def _report_id(
   scenario_name: str,
 ) -> str:
   normalized = captured_at_utc.replace(':', '').replace('-', '').replace('T', '-').replace('Z', '')
-  scenario_slug = scenario_name.lower().replace(' ', '-').replace('/', '-')
+  scenario_slug = _safe_file_component(
+    scenario_name.lower().replace(' ', '-'),
+    fallback='scenario',
+  )
   return 'cv-{stamp}-{phase}-{scenario}'.format(
     stamp=normalized,
-    phase=session.phase.value,
+    phase=_safe_file_component(session.phase.value, fallback='phase'),
     scenario=scenario_slug,
   )
 
@@ -1516,3 +1529,26 @@ def _dedupe_strings(values: Iterable[str]) -> Tuple[str, ...]:
     if value not in deduped:
       deduped.append(value)
   return tuple(deduped)
+
+
+def _safe_reference_file_name(
+  reference_file_name: Optional[str],
+  fallback_name: str,
+) -> str:
+  candidate = reference_file_name or fallback_name
+  last_segment = candidate.replace('\\', '/').split('/')[-1]
+  safe_name = _safe_file_component(last_segment, fallback=fallback_name)
+  return safe_name
+
+
+def _safe_file_component(value: str, fallback: str = 'artifact') -> str:
+  candidate = str(value or '').strip()
+  if not candidate:
+    return fallback
+  candidate = candidate.replace('\\', '-').replace('/', '-')
+  candidate = SAFE_FILE_COMPONENT_PATTERN.sub('-', candidate)
+  candidate = SAFE_DOT_RUN_PATTERN.sub('-', candidate)
+  candidate = candidate.strip(' .-_')
+  if not candidate:
+    return fallback
+  return candidate

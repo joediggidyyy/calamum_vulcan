@@ -1,4 +1,4 @@
-"""FS-08 sprint-close integration tests for Calamum Vulcan."""
+"""Integrated closeout-bundle tests for Calamum Vulcan."""
 
 from __future__ import annotations
 
@@ -15,13 +15,14 @@ if str(FINAL_EXAM_ROOT) not in sys.path:
 
 from calamum_vulcan.app.integration import build_sprint_close_bundle
 from calamum_vulcan.app.integration import build_orchestration_close_bundle
+from calamum_vulcan.app.integration import build_read_side_close_bundle
 from calamum_vulcan.app.integration import render_sprint_close_bundle_markdown
 from calamum_vulcan.app.integration import serialize_sprint_close_bundle_json
 from calamum_vulcan.app.integration import write_sprint_close_bundle
 
 
 class IntegrationSuiteTests(unittest.TestCase):
-  """Prove the FS-08 sprint-close bundle stays empirical and bounded."""
+  """Prove integrated closeout bundles stay empirical and bounded."""
 
   def test_sprint_close_bundle_covers_expected_scenarios(self) -> None:
     bundle = build_sprint_close_bundle(captured_at_utc='2026-04-18T21:10:00Z')
@@ -103,6 +104,51 @@ class IntegrationSuiteTests(unittest.TestCase):
     self.assertIn('Sprint 0.2.0 closes with 5/5 orchestration-close proof points satisfied', markdown)
     self.assertIn('summary_only', markdown)
     self.assertIn('preserved', markdown)
+
+  def test_read_side_close_bundle_proves_native_and_fallback_read_side_matrix(self) -> None:
+    bundle = build_read_side_close_bundle(
+      captured_at_utc='2026-04-20T23:10:00Z'
+    )
+    scenario_map = {scenario.scenario_id: scenario for scenario in bundle.scenarios}
+
+    self.assertEqual(bundle.release_version, '0.3.0')
+    self.assertEqual(bundle.suite_name, 'read-side-close')
+    self.assertEqual(
+      tuple(scenario_map.keys()),
+      (
+        'inspect-only-ready-review',
+        'native-adb-package-review',
+        'pit-mismatch-review',
+        'fastboot-fallback-review',
+        'fallback-exhausted-review',
+      ),
+    )
+    self.assertTrue(all(point.passed for point in bundle.proof_points))
+    self.assertEqual(scenario_map['inspect-only-ready-review'].inspection_posture, 'ready')
+    self.assertEqual(scenario_map['native-adb-package-review'].live_source, 'adb')
+    self.assertEqual(
+      scenario_map['native-adb-package-review'].pit_package_alignment,
+      'matched',
+    )
+    self.assertEqual(scenario_map['pit-mismatch-review'].pit_package_alignment, 'mismatched')
+    self.assertEqual(scenario_map['fastboot-fallback-review'].live_source, 'fastboot')
+    self.assertEqual(
+      scenario_map['fallback-exhausted-review'].inspection_posture,
+      'failed',
+    )
+
+  def test_read_side_close_markdown_mentions_fallback_visibility_and_0_4_0_debt(self) -> None:
+    bundle = build_read_side_close_bundle(
+      captured_at_utc='2026-04-20T23:15:00Z'
+    )
+    markdown = render_sprint_close_bundle_markdown(bundle)
+
+    self.assertIn('Calamum Vulcan FS3-07 read-side-close bundle', markdown)
+    self.assertIn('Sprint 0.3.0 closes with 5/5 read-side-close proof points satisfied', markdown)
+    self.assertIn('Fastboot fallback review', markdown)
+    self.assertIn('inspection posture:', markdown)
+    self.assertIn('fallback=`engaged`', markdown)
+    self.assertIn('Carry-forward debt into 0.4.0', markdown)
 
 
 if __name__ == '__main__':

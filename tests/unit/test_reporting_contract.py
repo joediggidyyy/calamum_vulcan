@@ -382,6 +382,82 @@ class ReportingContractTests(unittest.TestCase):
     self.assertIn('Calamum Vulcan transport transcript', transcript_contents)
     self.assertIn('USB transfer timeout during partition write', transcript_contents)
 
+  def test_transcript_reference_file_name_sanitizes_malicious_scenario_name(self) -> None:
+    session, package_assessment, transport_trace = build_demo_adapter_session('failure')
+    pit_inspection = build_demo_pit_inspection(
+      'failure',
+      session=session,
+      package_assessment=package_assessment,
+    )
+    report = build_session_evidence_report(
+      session,
+      scenario_name=r'..\rogue\evidence:lane/../../still-bad',
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      transport_trace=transport_trace,
+      captured_at_utc='2026-04-19T01:15:00Z',
+    )
+
+    reference_name = report.transcript.reference_file_name
+
+    self.assertIsNotNone(reference_name)
+    self.assertNotIn('..', reference_name)
+    self.assertNotIn('/', reference_name)
+    self.assertNotIn('\\', reference_name)
+    self.assertNotIn(':', reference_name)
+
+    with TemporaryDirectory() as temp_dir:
+      output_path = Path(temp_dir) / 'evidence.json'
+      write_session_evidence_report(
+        report,
+        output_path,
+        transport_trace=transport_trace,
+      )
+
+      transcript_path = Path(temp_dir) / reference_name
+      file_names = {path.name for path in Path(temp_dir).iterdir() if path.is_file()}
+      transcript_exists = transcript_path.exists()
+
+    self.assertTrue(transcript_exists)
+    self.assertIn('evidence.json', file_names)
+    self.assertIn(reference_name, file_names)
+
+  def test_writer_sanitizes_malicious_transcript_reference_file_name(self) -> None:
+    session, package_assessment, transport_trace = build_demo_adapter_session('failure')
+    pit_inspection = build_demo_pit_inspection(
+      'failure',
+      session=session,
+      package_assessment=package_assessment,
+    )
+    report = build_session_evidence_report(
+      session,
+      scenario_name=scenario_label('failure'),
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      transport_trace=transport_trace,
+      captured_at_utc='2026-04-19T01:20:00Z',
+    )
+    report = replace(
+      report,
+      transcript=replace(
+        report.transcript,
+        reference_file_name=r'..\escape\rogue:transcript.log',
+      ),
+    )
+
+    with TemporaryDirectory() as temp_dir:
+      output_path = Path(temp_dir) / 'failure_evidence.json'
+      write_session_evidence_report(
+        report,
+        output_path,
+        transport_trace=transport_trace,
+      )
+
+      file_names = {path.name for path in Path(temp_dir).iterdir() if path.is_file()}
+
+    self.assertIn('failure_evidence.json', file_names)
+    self.assertIn('rogue-transcript.log', file_names)
+
 
 if __name__ == '__main__':
   unittest.main()

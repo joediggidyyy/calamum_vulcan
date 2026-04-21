@@ -1,9 +1,10 @@
-"""Integrated sprint-close walkthrough helpers for the Calamum Vulcan FS-08 lane."""
+"""Integrated closeout walkthrough helpers for Calamum Vulcan release lanes."""
 
 from __future__ import annotations
 
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime
 from datetime import timezone
 import json
@@ -11,14 +12,30 @@ from pathlib import Path
 from typing import Optional
 from typing import Tuple
 
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsBackend
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsProcessResult
+from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_fastboot_detect_command_plan
+from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
+from calamum_vulcan.adapters.heimdall import build_print_pit_command_plan
+from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
 from calamum_vulcan.domain.reporting import REPORT_EXPORT_TARGETS
 from calamum_vulcan.domain.reporting import REPORT_SCHEMA_VERSION
 from calamum_vulcan.domain.reporting import SessionEvidenceReport
 from calamum_vulcan.domain.reporting import build_session_evidence_report
+from calamum_vulcan.domain.live_device import LiveFallbackPosture
+from calamum_vulcan.domain.live_device import apply_live_device_info_trace
+from calamum_vulcan.domain.live_device import build_live_detection_session
+from calamum_vulcan.domain.pit import build_pit_inspection
 from calamum_vulcan.domain.state import PlatformSession
+from calamum_vulcan.domain.state import build_inspection_workflow
+from calamum_vulcan.fixtures import load_heimdall_pit_fixture
 
 from .demo import build_demo_adapter_session
 from .demo import build_demo_package_assessment
+from .demo import build_demo_pit_inspection
 from .demo import build_demo_session
 from .demo import scenario_label
 from .view_models import PANEL_TITLES
@@ -26,7 +43,11 @@ from .view_models import build_shell_view_model
 from .view_models import describe_shell
 
 
-INTEGRATION_SUITE_NAMES = ('sprint-close', 'orchestration-close')
+INTEGRATION_SUITE_NAMES = (
+  'sprint-close',
+  'orchestration-close',
+  'read-side-close',
+)
 
 SPRINT_CLOSE_CARRY_FORWARD_DEBT = (
   'Keep live-device subprocess transport out of `0.1.0`; the next release should define the first bounded runtime session loop explicitly.',
@@ -40,6 +61,13 @@ ORCHESTRATION_CLOSE_CARRY_FORWARD_DEBT = (
   'Promote transcript packaging beyond plain transport logs only after redaction, PIT handling, and evidence-volume policy stay explicit.',
   'Decide whether future runtime lanes should bind live PIT/device interrogation into reviewed-plan truth or keep those concerns separated.',
   'Keep GUI startup detection explicit and user-invoked until any background probing can prove it stays off the UI thread.',
+)
+
+READ_SIDE_CLOSE_CARRY_FORWARD_DEBT = (
+  'Expand the repo-owned device registry and PIT fixture corpus before widening native read-side support claims beyond the current reviewed Samsung subset.',
+  'Decide whether fastboot-detected fallback sessions should gain any richer repo-owned identity beyond the current bounded labeling and guidance surface.',
+  'Decide how much PIT/package alignment truth should graduate from evidence and guidance into harder runtime/preflight enforcement in `0.4.0`.',
+  'Keep detached GUI host runtime hygiene under observation as live read-side coverage expands; no fresh orphan was observed in the latest closeout pass.',
 )
 
 
@@ -77,6 +105,17 @@ class SprintCloseScenarioResult:
   transcript_reference_file: Optional[str] = None
   transcript_line_count: int = 0
   transcript_policy: str = 'summary_only'
+  inspection_posture: str = 'uninspected'
+  inspection_evidence_ready: bool = False
+  inspection_read_side_only: bool = True
+  live_state: str = 'unhydrated'
+  live_source: Optional[str] = None
+  live_fallback_posture: str = 'not_needed'
+  live_info_state: str = 'not_collected'
+  pit_state: str = 'not_collected'
+  pit_source: Optional[str] = None
+  pit_package_alignment: str = 'not_reviewed'
+  pit_fallback_posture: str = 'not_needed'
 
 
 @dataclass(frozen=True)
@@ -220,6 +259,36 @@ def build_orchestration_close_bundle(
   )
 
 
+def build_read_side_close_bundle(
+  captured_at_utc: Optional[str] = None,
+) -> SprintCloseBundle:
+  """Build the FS3-07 read-side-close bundle for Sprint 0.3.0."""
+
+  captured = captured_at_utc or _utc_now()
+  scenarios = _build_read_side_close_scenarios(captured)
+  proof_points = _build_read_side_close_proof_points(scenarios)
+  passed_count = sum(1 for point in proof_points if point.passed)
+  summary = (
+    'Sprint 0.3.0 closes with {passed}/{total} read-side-close proof points '
+    'satisfied across {scenario_count} integrated scenarios.'.format(
+      passed=passed_count,
+      total=len(proof_points),
+      scenario_count=len(scenarios),
+    )
+  )
+  return SprintCloseBundle(
+    schema_version=REPORT_SCHEMA_VERSION,
+    bundle_id=_bundle_id(captured, prefix='cv-fs3-07-read-side-close'),
+    release_version='0.3.0',
+    suite_name='read-side-close',
+    captured_at_utc=captured,
+    summary=summary,
+    proof_points=proof_points,
+    scenarios=scenarios,
+    carry_forward_debt=READ_SIDE_CLOSE_CARRY_FORWARD_DEBT,
+  )
+
+
 def serialize_sprint_close_bundle_json(bundle: SprintCloseBundle) -> str:
   """Render one sprint-close bundle as formatted JSON."""
 
@@ -296,9 +365,31 @@ def render_sprint_close_bundle_markdown(bundle: SprintCloseBundle) -> str:
             else 'summary_only'
           )
         ),
-        '',
       ]
     )
+    if bundle.suite_name == 'read-side-close':
+      lines.extend(
+        [
+          '- inspection posture: `{posture}` (evidence ready: `{ready}`, read-side only: `{read_side_only}`)'.format(
+            posture=scenario.inspection_posture,
+            ready='yes' if scenario.inspection_evidence_ready else 'no',
+            read_side_only='yes' if scenario.inspection_read_side_only else 'no',
+          ),
+          '- live path: state=`{state}` source=`{source}` info=`{info}` fallback=`{fallback}`'.format(
+            state=scenario.live_state,
+            source=scenario.live_source or 'none',
+            info=scenario.live_info_state,
+            fallback=scenario.live_fallback_posture,
+          ),
+          '- pit path: state=`{state}` source=`{source}` alignment=`{alignment}` fallback=`{fallback}`'.format(
+            state=scenario.pit_state,
+            source=scenario.pit_source or 'none',
+            alignment=scenario.pit_package_alignment,
+            fallback=scenario.pit_fallback_posture,
+          ),
+        ]
+      )
+    lines.append('')
 
   lines.extend([_carry_forward_heading(bundle), ''])
   for item in bundle.carry_forward_debt:
@@ -327,17 +418,44 @@ def _build_scenario_result(
   captured_at_utc: str,
 ) -> SprintCloseScenarioResult:
   session, package_assessment, transport_trace = _resolve_scenario_inputs(spec)
+  return _build_scenario_result_from_context(
+    scenario_id=spec.scenario_id,
+    scenario_name=spec.scenario_name,
+    transport_source=spec.transport_source,
+    package_fixture=spec.package_fixture,
+    captured_at_utc=captured_at_utc,
+    session=session,
+    package_assessment=package_assessment,
+    transport_trace=transport_trace,
+  )
+
+
+def _build_scenario_result_from_context(
+  scenario_id: str,
+  scenario_name: str,
+  transport_source: str,
+  package_fixture: Optional[str],
+  captured_at_utc: str,
+  session: PlatformSession,
+  package_assessment: Optional[object] = None,
+  pit_inspection: Optional[object] = None,
+  transport_trace: Optional[object] = None,
+) -> SprintCloseScenarioResult:
+  """Build one integrated scenario result from explicit session context."""
+
   report = build_session_evidence_report(
     session,
-    scenario_name=spec.scenario_name,
+    scenario_name=scenario_name,
     package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
     transport_trace=transport_trace,
     captured_at_utc=captured_at_utc,
   )
   model = build_shell_view_model(
     session,
-    scenario_name=spec.scenario_name,
+    scenario_name=scenario_name,
     package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
     transport_trace=transport_trace,
     session_report=report,
   )
@@ -345,10 +463,10 @@ def _build_scenario_result(
     action.label for action in model.control_actions if action.enabled
   )
   return SprintCloseScenarioResult(
-    scenario_id=spec.scenario_id,
-    scenario_name=spec.scenario_name,
-    transport_source=spec.transport_source,
-    package_fixture=spec.package_fixture,
+    scenario_id=scenario_id,
+    scenario_name=scenario_name,
+    transport_source=transport_source,
+    package_fixture=package_fixture,
     phase_label=model.phase_label,
     gate_label=model.gate_label,
     outcome=report.outcome.outcome,
@@ -366,6 +484,17 @@ def _build_scenario_result(
     transcript_reference_file=report.transcript.reference_file_name,
     transcript_line_count=report.transcript.line_count,
     transcript_policy=report.transcript.policy,
+    inspection_posture=report.inspection.posture,
+    inspection_evidence_ready=report.inspection.evidence_ready,
+    inspection_read_side_only=report.inspection.read_side_only,
+    live_state=report.device.live.state,
+    live_source=report.device.live.source,
+    live_fallback_posture=report.device.live.fallback_posture,
+    live_info_state=report.device.live.info_state,
+    pit_state=report.pit.state,
+    pit_source=report.pit.source,
+    pit_package_alignment=report.pit.package_alignment,
+    pit_fallback_posture=report.pit.fallback_posture,
   )
 
 
@@ -545,13 +674,316 @@ def _build_orchestration_proof_points(
   )
 
 
+def _build_read_side_close_scenarios(
+  captured_at_utc: str,
+) -> Tuple[SprintCloseScenarioResult, ...]:
+  """Return the deterministic FS3-07 read-side closeout scenario matrix."""
+
+  inspect_live_detection = _ready_adb_live_detection()
+  inspect_pit = _ready_pit_inspection()
+  inspect_session = replace(
+    build_demo_session('no-device'),
+    live_detection=inspect_live_detection,
+    inspection=build_inspection_workflow(
+      inspect_live_detection,
+      pit_inspection=inspect_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  native_session = build_demo_session('ready')
+  native_package = build_demo_package_assessment('ready', session=native_session)
+  native_live_detection = _ready_adb_live_detection()
+  native_pit = _ready_pit_inspection(
+    detected_product_code=native_session.product_code,
+    package_assessment=native_package,
+  )
+  native_session = replace(
+    native_session,
+    live_detection=native_live_detection,
+    inspection=build_inspection_workflow(
+      native_live_detection,
+      pit_inspection=native_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  mismatch_session = build_demo_session('blocked')
+  mismatch_package = build_demo_package_assessment(
+    'blocked',
+    session=mismatch_session,
+  )
+  mismatch_live_detection = _ready_adb_live_detection()
+  mismatch_pit = _ready_pit_inspection(
+    detected_product_code=mismatch_session.product_code,
+    package_assessment=mismatch_package,
+  )
+  mismatch_session = replace(
+    mismatch_session,
+    live_detection=mismatch_live_detection,
+    inspection=build_inspection_workflow(
+      mismatch_live_detection,
+      pit_inspection=mismatch_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  fastboot_live_detection = _fastboot_fallback_detection(device_present=True)
+  fastboot_session = replace(
+    build_demo_session('no-device'),
+    live_detection=fastboot_live_detection,
+    inspection=build_inspection_workflow(
+      fastboot_live_detection,
+      pit_inspection=None,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  fallback_exhausted_detection = _fastboot_fallback_detection(device_present=False)
+  fallback_exhausted_session = replace(
+    build_demo_session('no-device'),
+    live_detection=fallback_exhausted_detection,
+    inspection=build_inspection_workflow(
+      fallback_exhausted_detection,
+      pit_inspection=None,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  return (
+    _build_scenario_result_from_context(
+      scenario_id='inspect-only-ready-review',
+      scenario_name='Inspect-only ready evidence review',
+      transport_source='adb-read-side',
+      package_fixture=None,
+      captured_at_utc=captured_at_utc,
+      session=inspect_session,
+      package_assessment=None,
+      pit_inspection=inspect_pit,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='native-adb-package-review',
+      scenario_name='Native ADB package alignment review',
+      transport_source='adb-read-side',
+      package_fixture='ready-standard',
+      captured_at_utc=captured_at_utc,
+      session=native_session,
+      package_assessment=native_package,
+      pit_inspection=native_pit,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='pit-mismatch-review',
+      scenario_name='PIT mismatch review',
+      transport_source='adb-read-side',
+      package_fixture='blocked-review',
+      captured_at_utc=captured_at_utc,
+      session=mismatch_session,
+      package_assessment=mismatch_package,
+      pit_inspection=mismatch_pit,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='fastboot-fallback-review',
+      scenario_name='Fastboot fallback review',
+      transport_source='fastboot-read-side',
+      package_fixture=None,
+      captured_at_utc=captured_at_utc,
+      session=fastboot_session,
+      package_assessment=None,
+      pit_inspection=None,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='fallback-exhausted-review',
+      scenario_name='Fallback exhausted no-device review',
+      transport_source='fastboot-read-side',
+      package_fixture=None,
+      captured_at_utc=captured_at_utc,
+      session=fallback_exhausted_session,
+      package_assessment=None,
+      pit_inspection=None,
+    ),
+  )
+
+
+def _build_read_side_close_proof_points(
+  scenarios: Tuple[SprintCloseScenarioResult, ...],
+) -> Tuple[SprintCloseProofPoint, ...]:
+  """Return proof points for the FS3-07 read-side closeout suite."""
+
+  scenario_map = {scenario.scenario_id: scenario for scenario in scenarios}
+  inspect_ready = scenario_map['inspect-only-ready-review']
+  native_review = scenario_map['native-adb-package-review']
+  pit_mismatch = scenario_map['pit-mismatch-review']
+  fastboot_fallback = scenario_map['fastboot-fallback-review']
+  fallback_exhausted = scenario_map['fallback-exhausted-review']
+
+  stable_shell = all(scenario.panel_titles == PANEL_TITLES for scenario in scenarios)
+  inspect_only_ready = (
+    inspect_ready.inspection_posture == 'ready'
+    and inspect_ready.inspection_evidence_ready
+    and inspect_ready.inspection_read_side_only
+    and inspect_ready.transport_state == 'not_invoked'
+    and not inspect_ready.transcript_preserved
+    and inspect_ready.export_ready
+  )
+  native_adb_ready = (
+    native_review.live_state == 'detected'
+    and native_review.live_source == 'adb'
+    and native_review.live_info_state == 'captured'
+    and native_review.pit_state == 'captured'
+    and native_review.pit_package_alignment == 'matched'
+    and native_review.gate_label == 'Gate Ready'
+  )
+  pit_mismatch_visible = (
+    pit_mismatch.live_source == 'adb'
+    and pit_mismatch.live_info_state == 'captured'
+    and pit_mismatch.pit_state == 'captured'
+    and pit_mismatch.pit_package_alignment == 'mismatched'
+    and pit_mismatch.gate_label == 'Gate Blocked'
+  )
+  fallback_discipline_visible = (
+    fastboot_fallback.live_source == 'fastboot'
+    and fastboot_fallback.live_fallback_posture == 'engaged'
+    and fastboot_fallback.live_info_state == 'unavailable'
+    and fastboot_fallback.inspection_posture == 'partial'
+    and fallback_exhausted.live_state == 'cleared'
+    and fallback_exhausted.live_fallback_posture == 'engaged'
+    and fallback_exhausted.inspection_posture == 'failed'
+  )
+  export_contract_holds = all(
+    scenario.export_targets == REPORT_EXPORT_TARGETS for scenario in scenarios
+  ) and all(
+    scenario_map[scenario_id].export_ready
+    for scenario_id in (
+      'inspect-only-ready-review',
+      'native-adb-package-review',
+      'pit-mismatch-review',
+      'fastboot-fallback-review',
+      'fallback-exhausted-review',
+    )
+  )
+
+  return (
+    SprintCloseProofPoint(
+      label='Inspect-only read-side lane stays evidence-ready without transport activation',
+      passed=inspect_only_ready,
+      summary='The read-side-ready inspection lane preserves exportable evidence, explicit read-side boundaries, and no transport transcript because no write path was invoked.',
+    ),
+    SprintCloseProofPoint(
+      label='Native ADB detection, bounded info capture, and PIT review remain platform-owned for the supported subset',
+      passed=native_adb_ready,
+      summary='The native ADB review lane keeps captured live info and captured PIT truth visible while the reviewed package remains Gate Ready with matched alignment.',
+    ),
+    SprintCloseProofPoint(
+      label='Reviewed-package mismatch remains explicit when PIT truth disagrees',
+      passed=pit_mismatch_visible,
+      summary='The PIT mismatch lane keeps live ADB truth visible while the reviewed package remains blocked by captured mismatched PIT evidence.',
+    ),
+    SprintCloseProofPoint(
+      label='Fallback discipline stays visible when ADB ownership stops at fastboot or no-device states',
+      passed=fallback_discipline_visible,
+      summary='Fastboot fallback remains visibly engaged when ADB does not establish the device, and the exhausted lane stays explicitly cleared rather than pretending support.',
+    ),
+    SprintCloseProofPoint(
+      label='Shell contract and evidence export targets remain stable across native, fallback, and review-only read-side scenarios',
+      passed=stable_shell and export_contract_holds,
+      summary='All read-side closeout scenarios preserve the five-panel shell layout and keep JSON/Markdown evidence export targets available for operator review.',
+    ),
+  )
+
+
+def _ready_adb_live_detection():
+  """Return one deterministic ready ADB live-detection snapshot with info."""
+
+  detection_trace = normalize_android_tools_result(
+    build_adb_detect_command_plan(),
+    AndroidToolsProcessResult(
+      fixture_name='adb-ready',
+      operation=AndroidToolsOperation.ADB_DEVICES,
+      backend=AndroidToolsBackend.ADB,
+      exit_code=0,
+      stdout_lines=(
+        'List of devices attached',
+        'R58N12345AB\tdevice usb:1-1 product:dm3q model:SM_G991U device:dm3q',
+      ),
+    ),
+  )
+  info_trace = normalize_android_tools_result(
+    build_adb_device_info_command_plan(device_serial='R58N12345AB'),
+    AndroidToolsProcessResult(
+      fixture_name='adb-info-ready',
+      operation=AndroidToolsOperation.ADB_GETPROP,
+      backend=AndroidToolsBackend.ADB,
+      exit_code=0,
+      stdout_lines=(
+        '[ro.product.manufacturer]: [samsung]',
+        '[ro.product.brand]: [samsung]',
+        '[ro.build.version.release]: [14]',
+        '[ro.build.version.security_patch]: [2026-04-05]',
+        '[ro.bootloader]: [G991USQS9HYD1]',
+      ),
+    ),
+  )
+  return apply_live_device_info_trace(
+    build_live_detection_session(detection_trace),
+    info_trace,
+  )
+
+
+def _fastboot_fallback_detection(device_present: bool):
+  """Return one deterministic fastboot fallback detection session."""
+
+  stdout_lines = ('R58N12345AB\tfastboot',) if device_present else ()
+  fallback_reason = (
+    'ADB did not establish a live device; fastboot captured the active companion.'
+    if device_present
+    else 'ADB did not establish a live device; fastboot fallback also failed to capture a live companion.'
+  )
+  trace = normalize_android_tools_result(
+    build_fastboot_detect_command_plan(),
+    AndroidToolsProcessResult(
+      fixture_name='fastboot-ready' if device_present else 'fastboot-empty',
+      operation=AndroidToolsOperation.FASTBOOT_DEVICES,
+      backend=AndroidToolsBackend.FASTBOOT,
+      exit_code=0,
+      stdout_lines=stdout_lines,
+    ),
+  )
+  return build_live_detection_session(
+    trace,
+    fallback_posture=LiveFallbackPosture.ENGAGED,
+    fallback_reason=fallback_reason,
+    source_labels=('adb', 'fastboot'),
+  )
+
+
+def _ready_pit_inspection(
+  detected_product_code: Optional[str] = None,
+  package_assessment: Optional[object] = None,
+):
+  """Return one deterministic captured PIT inspection for the read-side suite."""
+
+  trace = normalize_heimdall_result(
+    build_print_pit_command_plan(),
+    load_heimdall_pit_fixture('pit-print-ready-g991u'),
+  )
+  return build_pit_inspection(
+    trace,
+    detected_product_code=detected_product_code,
+    package_assessment=package_assessment,
+  )
+
+
 def _bundle_heading(bundle: SprintCloseBundle) -> str:
+  if bundle.suite_name == 'read-side-close':
+    return '## Calamum Vulcan FS3-07 read-side-close bundle'
   if bundle.suite_name == 'orchestration-close':
     return '## Calamum Vulcan FS2-07 orchestration-close bundle'
   return '## Calamum Vulcan FS-08 sprint-close bundle'
 
 
 def _carry_forward_heading(bundle: SprintCloseBundle) -> str:
+  if bundle.suite_name == 'read-side-close':
+    return '### Carry-forward debt into 0.4.0'
   if bundle.suite_name == 'orchestration-close':
     return '### Carry-forward debt into 0.3.0'
   return '### Carry-forward debt into 0.2.0'
