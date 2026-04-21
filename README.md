@@ -4,7 +4,7 @@ Samsung-focused open-source Android flashing platform with GUI-first workflows, 
 
 ## Current status
 
-`0.3.0` is the current Calamum Vulcan candidate boundary in this repository.
+`0.3.0` is now the current public Calamum Vulcan release on both PyPI and GitHub.
 
 Current release posture:
 
@@ -13,10 +13,10 @@ Current release posture:
 - validated source-checkout runtime: Python `3.14`
 - license: MIT
 - current repository package version: `0.3.0`
-- current candidate tag target: `v0.3.0`
-- latest public PyPI/GitHub release before candidate seal: `0.2.0`
+- current public tag boundary: `v0.3.0`
+- latest public PyPI/GitHub release: `0.3.0`
 - live PyPI project: `https://pypi.org/project/calamum-vulcan/`
-- latest public GitHub release: `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.2.0`
+- live GitHub release: `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.3.0`
 
 ## Source checkout quickstart
 
@@ -117,7 +117,7 @@ Calamum Vulcan is currently focused on Samsung-first flashing workflows with:
 - repo-owned read-side device detection, info capture, and PIT-aware inspection evidence for the reviewed Samsung subset
 - bounded ADB/Fastboot companion controls for detection and reboot handoffs where native ownership is incomplete
 
-## Support posture for `0.3.0` candidate
+## Support posture for `0.3.0`
 
 | Surface                    | `0.3.0` posture                                                                                  |
 | -------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -135,7 +135,7 @@ Calamum Vulcan is currently focused on Samsung-first flashing workflows with:
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Transport execution     | the packaged flashing workflow remains fixture-backed rather than public live-subprocess-backed                           |
 | Read-side device matrix | native read-side ownership is still limited to the reviewed Samsung subset; fallback and exhausted states remain explicit |
-| Host matrix             | Windows is the only empirically reviewed packaged host for the `0.3.0` candidate                                          |
+| Host matrix             | Windows is the only empirically reviewed packaged host for the public `0.3.0` boundary                                     |
 | Qt deployment           | Qt font packaging still emits a warning in some review environments                                                       |
 | Fixture debt            | warning-tier checksum placeholder debt remains in legacy fixture manifests                                                |
 
@@ -151,4 +151,4 @@ Calamum Vulcan is currently focused on Samsung-first flashing workflows with:
 
 ## Release note
 
-The `0.3.0` candidate boundary carries the read-side-close bundle, packaged inspect-only evidence, PIT-aware inspection truth, and the standalone security/adversarial gate forward into packaging. Until the sealed `v0.3.0` boundary is tagged and released, `0.2.0` remains the latest public PyPI/GitHub release.
+`calamum-vulcan==0.3.0` is now published on PyPI and released on GitHub. The public boundary was closed with sealed `0.3.0` artifacts, installed-artifact proof, TestPyPI rehearsal, a published GitHub release, and final production PyPI upload.

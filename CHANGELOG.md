@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.3.0 - 2026-04-20
+## 0.3.0 - 2026-04-21
 
-Third Calamum Vulcan candidate boundary, moving supported Samsung read-side detection, bounded info capture, PIT-aware inspection review, and closeout evidence into repo-owned platform surfaces while keeping write-side flashing out of the public support boundary.
+Third public Calamum Vulcan release boundary, moving supported Samsung read-side detection, bounded info capture, PIT-aware inspection review, and closeout evidence into repo-owned platform surfaces while keeping write-side flashing out of the public support boundary.
 
 ### Added
 
@@ -24,17 +24,21 @@ Third Calamum Vulcan candidate boundary, moving supported Samsung read-side dete
 - targeted adversarial regression passed for reporting transcript sanitization and unsafe archive members
 - broader regression passed for CLI control surfaces, integrated closeout bundles, and Qt shell contracts
 - the standalone security validation gate passed with warning-tier checksum-placeholder debt only
+- live GitHub release published at `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.3.0`
+- live PyPI publication completed for `calamum-vulcan==0.3.0`
 
 ### Release-boundary status
 
-- `0.2.0` remains the latest public PyPI/GitHub release until the sealed `v0.3.0` boundary moves
-- the `0.3.0` candidate is intended to publish only when the exact version strings, artifacts, hashes, tag, release notes, and install proof all point to the same sealed boundary
+- final public boundary sealed at tag `v0.3.0` on commit `35541cd2e91555f2c653be0a95ced560f89bcb2b`
+- GitHub release object published at `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.3.0`
+- production PyPI project page now carries `0.3.0` at `https://pypi.org/project/calamum-vulcan/0.3.0/`
+- the release-triggered `Upload Python Package` workflow failed its PyPI publish leg, so the final production PyPI boundary was completed manually through the existing `pypi` profile
 
 ### Known limitations
 
 - live firmware flashing remains outside the intended `0.3.0` public support boundary
 - native read-side ownership remains limited to the reviewed Samsung subset; fallback remains explicit where ownership stops
-- Windows remains the only empirically reviewed packaged host for the `0.3.0` candidate
+- Windows remains the only empirically reviewed packaged host for the public `0.3.0` boundary
 - Qt font packaging still emits a non-blocking warning in some environments
 - warning-tier checksum placeholder debt remains in legacy fixture manifests
 
