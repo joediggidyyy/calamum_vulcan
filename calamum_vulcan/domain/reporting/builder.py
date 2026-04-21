@@ -17,21 +17,30 @@ from calamum_vulcan.adapters.heimdall import HeimdallTraceState
 from calamum_vulcan.domain.device_registry import resolve_device_profile
 from calamum_vulcan.domain.flash_plan import ReviewedFlashPlan
 from calamum_vulcan.domain.flash_plan import build_reviewed_flash_plan
+from calamum_vulcan.domain.live_device import LiveDeviceInfoState
+from calamum_vulcan.domain.live_device import LiveDetectionState
 from calamum_vulcan.domain.package import PackageManifestAssessment
 from calamum_vulcan.domain.package import preflight_overrides_from_package_assessment
+from calamum_vulcan.domain.pit import PitInspection
+from calamum_vulcan.domain.pit import PitInspectionState
+from calamum_vulcan.domain.pit import PitPackageAlignment
 from calamum_vulcan.domain.preflight import PreflightInput
 from calamum_vulcan.domain.preflight import PreflightReport
 from calamum_vulcan.domain.preflight import PreflightSeverity
 from calamum_vulcan.domain.preflight import evaluate_preflight
 from calamum_vulcan.domain.state import PlatformSession
 from calamum_vulcan.domain.state import SessionPhase
+from calamum_vulcan.domain.state.model import InspectionWorkflowPosture
 
 from .model import DeviceEvidence
 from .model import DecisionTraceEntry
 from .model import FlashPlanEvidence
 from .model import HostEnvironmentEvidence
+from .model import InspectionWorkflowEvidence
+from .model import LiveDeviceEvidence
 from .model import OutcomeEvidence
 from .model import PackageEvidence
+from .model import PitEvidence
 from .model import PreflightEvidence
 from .model import REPORT_EXPORT_TARGETS
 from .model import REPORT_SCHEMA_VERSION
@@ -45,6 +54,7 @@ def build_session_evidence_report(
   scenario_name: str = 'Live session',
   preflight_report: Optional[PreflightReport] = None,
   package_assessment: Optional[PackageManifestAssessment] = None,
+  pit_inspection: Optional[PitInspection] = None,
   transport_trace: Optional[HeimdallNormalizedTrace] = None,
   captured_at_utc: Optional[str] = None,
 ) -> SessionEvidenceReport:
@@ -69,6 +79,8 @@ def build_session_evidence_report(
     platform=platform.system().lower(),
     execution_posture='fixture_first_adapter_late',
   )
+  inspection = _build_inspection_evidence(session)
+  live = _build_live_device_evidence(session)
   device = DeviceEvidence(
     device_present=session.guards.has_device,
     device_id=session.device_id,
@@ -79,7 +91,9 @@ def build_session_evidence_report(
     mode=session.mode,
     mode_entry_instructions=device_resolution.mode_entry_instructions,
     known_quirks=device_resolution.known_quirks,
+    live=live,
   )
+  pit = _build_pit_evidence(pit_inspection)
   package = _build_package_evidence(session, package_assessment)
   flash_plan = _build_flash_plan_evidence(package_assessment, reviewed_flash_plan)
   preflight = PreflightEvidence(
@@ -102,6 +116,7 @@ def build_session_evidence_report(
       session,
       report,
       package_assessment,
+      pit_inspection,
       transport_trace,
       reviewed_flash_plan,
     ),
@@ -110,6 +125,7 @@ def build_session_evidence_report(
     session,
     report,
     package_assessment,
+    pit_inspection,
     transport_trace,
     reviewed_flash_plan,
   )
@@ -118,6 +134,7 @@ def build_session_evidence_report(
     session,
     report,
     package_assessment,
+    pit_inspection,
     transport_trace,
     reviewed_flash_plan,
     transcript,
@@ -136,7 +153,9 @@ def build_session_evidence_report(
     session_phase=session.phase.value,
     summary=summary,
     host=host,
+    inspection=inspection,
     device=device,
+    pit=pit,
     package=package,
     flash_plan=flash_plan,
     preflight=preflight,
@@ -171,6 +190,29 @@ def render_session_evidence_markdown(report: SessionEvidenceReport) -> str:
     '',
     report.summary,
     '',
+    '### Inspection workflow',
+    '',
+    '- posture: `{posture}`'.format(
+      posture=report.inspection.posture,
+    ),
+    '- detect ran: `{ran}`'.format(
+      ran='yes' if report.inspection.detect_ran else 'no',
+    ),
+    '- info ran: `{ran}`'.format(
+      ran='yes' if report.inspection.info_ran else 'no',
+    ),
+    '- pit ran: `{ran}`'.format(
+      ran='yes' if report.inspection.pit_ran else 'no',
+    ),
+    '- evidence ready: `{ready}`'.format(
+      ready='yes' if report.inspection.evidence_ready else 'no',
+    ),
+    '- read-side only: `{posture}`'.format(
+      posture='yes' if report.inspection.read_side_only else 'no',
+    ),
+    '- summary: {summary}'.format(summary=report.inspection.summary),
+    '- next action: {action}'.format(action=report.inspection.next_action),
+    '',
     '### Device',
     '',
     '- present: `{present}`'.format(
@@ -189,6 +231,40 @@ def render_session_evidence_markdown(report: SessionEvidenceReport) -> str:
       match=report.device.registry_match_kind,
     ),
     '- mode: `{mode}`'.format(mode=report.device.mode or 'idle'),
+    '- live detection state: `{state}`'.format(
+      state=report.device.live.state,
+    ),
+    '- live source: `{source}`'.format(
+      source=report.device.live.source or 'none',
+    ),
+    '- live fallback posture: `{posture}`'.format(
+      posture=report.device.live.fallback_posture,
+    ),
+    '- live info state: `{state}`'.format(
+      state=report.device.live.info_state,
+    ),
+    '- live summary: {summary}'.format(
+      summary=report.device.live.summary,
+    ),
+    '',
+    '### PIT inspection',
+    '',
+    '- state: `{state}`'.format(state=report.pit.state),
+    '- source: `{source}`'.format(source=report.pit.source or 'none'),
+    '- fallback posture: `{posture}`'.format(
+      posture=report.pit.fallback_posture,
+    ),
+    '- package alignment: `{alignment}`'.format(
+      alignment=report.pit.package_alignment,
+    ),
+    '- observed fingerprint: `{fingerprint}`'.format(
+      fingerprint=report.pit.observed_pit_fingerprint or 'unknown',
+    ),
+    '- reviewed fingerprint: `{fingerprint}`'.format(
+      fingerprint=report.pit.reviewed_pit_fingerprint or 'unknown',
+    ),
+    '- partition rows: `{count}`'.format(count=report.pit.entry_count),
+    '- summary: {summary}'.format(summary=report.pit.summary),
     '',
     '### Package',
     '',
@@ -314,10 +390,69 @@ def render_session_evidence_markdown(report: SessionEvidenceReport) -> str:
     lines.append('- progress: `{progress}`'.format(
       progress=', '.join(report.transport.progress_markers),
     ))
+  for boundary in report.inspection.action_boundaries:
+    lines.append('- inspection boundary: {boundary}'.format(
+      boundary=boundary,
+    ))
+  for note in report.inspection.notes[:2]:
+    lines.append('- inspection note: {note}'.format(note=note))
+  if report.device.live.source_labels:
+    lines.append('- live sources considered: `{sources}`'.format(
+      sources=', '.join(report.device.live.source_labels),
+    ))
+  if report.device.live.device_present:
+    lines.append('- live serial: `{serial}`'.format(
+      serial=report.device.live.serial or 'unknown',
+    ))
+    lines.append('- live support posture: `{posture}`'.format(
+      posture=report.device.live.support_posture,
+    ))
+    lines.append('- live product code: `{product}`'.format(
+      product=report.device.live.product_code or 'unknown',
+    ))
+    lines.append('- live canonical product code: `{product}`'.format(
+      product=report.device.live.canonical_product_code or 'unknown',
+    ))
+    lines.append('- live marketing name: `{name}`'.format(
+      name=report.device.live.marketing_name or 'unknown',
+    ))
+    lines.append('- live mode: `{mode}`'.format(
+      mode=report.device.live.mode or 'unknown',
+    ))
+    lines.append('- live manufacturer: `{name}`'.format(
+      name=report.device.live.manufacturer or 'unknown',
+    ))
+    lines.append('- live android version: `{version}`'.format(
+      version=report.device.live.android_version or 'unknown',
+    ))
+    lines.append('- live security patch: `{patch}`'.format(
+      patch=report.device.live.security_patch or 'unknown',
+    ))
+    lines.append('- live bootloader: `{bootloader}`'.format(
+      bootloader=report.device.live.bootloader_version or 'unknown',
+    ))
+    if report.device.live.capability_hints:
+      lines.append('- live capability hints: `{hints}`'.format(
+        hints=', '.join(report.device.live.capability_hints),
+      ))
+    if report.device.live.operator_guidance:
+      lines.append('- live guidance: {guidance}'.format(
+        guidance=report.device.live.operator_guidance[0],
+      ))
   if report.device.mode_entry_instructions:
     lines.append('- mode entry: {instruction}'.format(
       instruction=report.device.mode_entry_instructions[0],
     ))
+  if report.pit.partition_names:
+    lines.append('- pit partitions: `{partitions}`'.format(
+      partitions=', '.join(report.pit.partition_names),
+    ))
+  if report.pit.download_path:
+    lines.append('- pit download path: `{path}`'.format(
+      path=report.pit.download_path,
+    ))
+  for guidance in report.pit.operator_guidance[:2]:
+    lines.append('- pit guidance: {guidance}'.format(guidance=guidance))
   for quirk in report.device.known_quirks[:1]:
     lines.append('- device quirk: {quirk}'.format(quirk=quirk))
   for note in report.transport.notes:
@@ -423,6 +558,24 @@ def _build_preflight_report(
   return evaluate_preflight(PreflightInput.from_session(session, **overrides))
 
 
+def _build_inspection_evidence(
+  session: PlatformSession,
+) -> InspectionWorkflowEvidence:
+  inspection = session.inspection
+  return InspectionWorkflowEvidence(
+    posture=inspection.posture.value,
+    summary=inspection.summary,
+    detect_ran=inspection.detect_ran,
+    info_ran=inspection.info_ran,
+    pit_ran=inspection.pit_ran,
+    evidence_ready=inspection.evidence_ready,
+    next_action=inspection.next_action,
+    action_boundaries=inspection.action_boundaries,
+    notes=inspection.notes,
+    captured_at_utc=inspection.captured_at_utc,
+  )
+
+
 def _build_package_evidence(
   session: PlatformSession,
   package_assessment: Optional[PackageManifestAssessment],
@@ -488,6 +641,102 @@ def _build_package_evidence(
     ),
     contract_issues=package_assessment.contract_issues,
     snapshot_issues=package_assessment.snapshot_issues,
+  )
+
+
+def _build_pit_evidence(
+  pit_inspection: Optional[PitInspection],
+) -> PitEvidence:
+  if pit_inspection is None:
+    return PitEvidence(
+      schema_version='0.3.0-fs3-04',
+      state='not_collected',
+      source=None,
+      summary='No PIT inspection has been captured yet.',
+    )
+
+  return PitEvidence(
+    schema_version=pit_inspection.schema_version,
+    state=pit_inspection.state.value,
+    source=(pit_inspection.source.value if pit_inspection.source is not None else None),
+    summary=pit_inspection.summary,
+    fallback_posture=pit_inspection.fallback_posture.value,
+    fallback_reason=pit_inspection.fallback_reason,
+    observed_product_code=pit_inspection.observed_product_code,
+    canonical_product_code=pit_inspection.canonical_product_code,
+    marketing_name=pit_inspection.marketing_name,
+    registry_match_kind=pit_inspection.registry_match_kind,
+    observed_pit_fingerprint=pit_inspection.observed_pit_fingerprint,
+    reviewed_pit_fingerprint=pit_inspection.reviewed_pit_fingerprint,
+    package_alignment=pit_inspection.package_alignment.value,
+    device_alignment=pit_inspection.device_alignment.value,
+    download_path=pit_inspection.download_path,
+    entry_count=pit_inspection.entry_count,
+    partition_names=pit_inspection.partition_names,
+    notes=pit_inspection.notes,
+    operator_guidance=pit_inspection.operator_guidance,
+  )
+
+
+def _build_live_device_evidence(
+  session: PlatformSession,
+) -> LiveDeviceEvidence:
+  live_detection = session.live_detection
+  snapshot = live_detection.snapshot
+  return LiveDeviceEvidence(
+    state=live_detection.state.value,
+    summary=live_detection.summary,
+    source=(
+      live_detection.source.value
+      if live_detection.source is not None
+      else None
+    ),
+    source_labels=live_detection.source_labels,
+    fallback_posture=live_detection.fallback_posture.value,
+    fallback_reason=live_detection.fallback_reason,
+    device_present=live_detection.device_present,
+    command_ready=live_detection.command_ready,
+    support_posture=(
+      snapshot.support_posture.value
+      if snapshot is not None
+      else 'identity_incomplete'
+    ),
+    serial=snapshot.serial if snapshot is not None else None,
+    transport=snapshot.transport if snapshot is not None else None,
+    product_code=snapshot.product_code if snapshot is not None else None,
+    canonical_product_code=(
+      snapshot.canonical_product_code
+      if snapshot is not None
+      else None
+    ),
+    marketing_name=snapshot.marketing_name if snapshot is not None else None,
+    registry_match_kind=(
+      snapshot.registry_match_kind
+      if snapshot is not None
+      else 'unknown'
+    ),
+    mode=snapshot.mode if snapshot is not None else None,
+    info_state=(
+      snapshot.info_state.value
+      if snapshot is not None
+      else 'not_collected'
+    ),
+    info_source_label=snapshot.info_source_label if snapshot is not None else None,
+    manufacturer=snapshot.manufacturer if snapshot is not None else None,
+    brand=snapshot.brand if snapshot is not None else None,
+    android_version=snapshot.android_version if snapshot is not None else None,
+    build_id=snapshot.build_id if snapshot is not None else None,
+    security_patch=snapshot.security_patch if snapshot is not None else None,
+    build_fingerprint=(
+      snapshot.build_fingerprint if snapshot is not None else None
+    ),
+    bootloader_version=(
+      snapshot.bootloader_version if snapshot is not None else None
+    ),
+    build_tags=snapshot.build_tags if snapshot is not None else None,
+    capability_hints=snapshot.capability_hints if snapshot is not None else (),
+    operator_guidance=snapshot.operator_guidance if snapshot is not None else (),
+    notes=live_detection.notes,
   )
 
 
@@ -604,6 +853,12 @@ def _build_transcript_evidence(
 
 
 def _outcome_label(session: PlatformSession) -> str:
+  if session.inspection.posture == InspectionWorkflowPosture.READY:
+    return 'inspection_ready'
+  if session.inspection.posture == InspectionWorkflowPosture.PARTIAL:
+    return 'inspection_partial'
+  if session.inspection.posture == InspectionWorkflowPosture.FAILED:
+    return 'inspection_failed'
   if session.phase == SessionPhase.COMPLETED:
     return 'completed'
   if session.phase == SessionPhase.FAILED:
@@ -619,6 +874,8 @@ def _outcome_label(session: PlatformSession) -> str:
 
 def _export_ready(session: PlatformSession) -> bool:
   return (
+    session.inspection.evidence_ready
+    or
     session.last_event is not None
     or session.guards.has_device
     or session.guards.package_loaded
@@ -630,6 +887,8 @@ def _next_action(
   report: PreflightReport,
   flash_plan: FlashPlanEvidence,
 ) -> str:
+  if session.inspection.posture != InspectionWorkflowPosture.UNINSPECTED:
+    return session.inspection.next_action
   if session.phase == SessionPhase.FAILED:
     return 'Review normalized failure evidence before attempting any retry.'
   if session.phase == SessionPhase.RESUME_NEEDED:
@@ -654,6 +913,8 @@ def _summary_for_session(
   flash_plan: FlashPlanEvidence,
   transcript: TranscriptEvidence,
 ) -> str:
+  if session.inspection.posture != InspectionWorkflowPosture.UNINSPECTED:
+    return session.inspection.summary
   if session.phase == SessionPhase.COMPLETED:
     if transcript.preserved:
       return 'Session completed cleanly and the evidence bundle plus bounded transport transcript are ready for export.'
@@ -683,6 +944,7 @@ def _recovery_guidance(
   session: PlatformSession,
   report: PreflightReport,
   package_assessment: Optional[PackageManifestAssessment],
+  pit_inspection: Optional[PitInspection],
   transport_trace: Optional[HeimdallNormalizedTrace],
   reviewed_flash_plan: Optional[ReviewedFlashPlan],
 ) -> Tuple[str, ...]:
@@ -714,6 +976,18 @@ def _recovery_guidance(
   elif package_assessment is not None and package_assessment.snapshot_issues:
     guidance.append('Seal and re-verify the analyzed snapshot before treating the current review path as execution-ready.')
 
+  if pit_inspection is not None:
+    if pit_inspection.state in (
+      PitInspectionState.MALFORMED,
+      PitInspectionState.FAILED,
+    ):
+      guidance.append('Do not treat the current PIT inspection as trustworthy until the PIT parser and acquisition path are healthy again.')
+    elif pit_inspection.package_alignment == PitPackageAlignment.MISMATCHED:
+      guidance.append('Do not proceed until the reviewed package PIT fingerprint matches the observed device PIT.')
+    elif pit_inspection.state == PitInspectionState.PARTIAL:
+      guidance.append('Keep PIT review bounded until metadata and partition rows agree fully.')
+    guidance.extend(pit_inspection.operator_guidance[:1])
+
   if transport_trace is not None and transport_trace.state == HeimdallTraceState.RESUME_NEEDED:
     guidance.append('Preserve the no-reboot handoff note before handing control back to the operator.')
 
@@ -731,6 +1005,7 @@ def _build_decision_trace(
   session: PlatformSession,
   report: PreflightReport,
   package_assessment: Optional[PackageManifestAssessment],
+  pit_inspection: Optional[PitInspection],
   transport_trace: Optional[HeimdallNormalizedTrace],
   reviewed_flash_plan: Optional[ReviewedFlashPlan],
 ) -> Tuple[DecisionTraceEntry, ...]:
@@ -748,6 +1023,86 @@ def _build_decision_trace(
       severity=report.gate.value,
     ),
   ]
+
+  if session.inspection.posture != InspectionWorkflowPosture.UNINSPECTED:
+    inspection_severity = 'info'
+    if session.inspection.posture == InspectionWorkflowPosture.READY:
+      inspection_severity = 'success'
+    elif session.inspection.posture == InspectionWorkflowPosture.PARTIAL:
+      inspection_severity = 'warning'
+    elif session.inspection.posture == InspectionWorkflowPosture.FAILED:
+      inspection_severity = 'danger'
+    trace.append(
+      DecisionTraceEntry(
+        source='inspection',
+        label='Inspect-only workflow',
+        summary=session.inspection.summary,
+        severity=inspection_severity,
+      )
+    )
+
+  if session.live_detection.state != LiveDetectionState.UNHYDRATED:
+    live_severity = 'info'
+    if session.live_detection.state == LiveDetectionState.FAILED:
+      live_severity = 'danger'
+    elif session.live_detection.state == LiveDetectionState.ATTENTION:
+      live_severity = 'warning'
+    trace.append(
+      DecisionTraceEntry(
+        source='live_detection',
+        label='Live detection',
+        summary=session.live_detection.summary,
+        severity=live_severity,
+      )
+    )
+    if (
+      session.live_detection.snapshot is not None
+      and session.live_detection.snapshot.info_state != LiveDeviceInfoState.NOT_COLLECTED
+    ):
+      info_severity = 'info'
+      if session.live_detection.snapshot.info_state == LiveDeviceInfoState.FAILED:
+        info_severity = 'danger'
+      elif session.live_detection.snapshot.info_state == LiveDeviceInfoState.PARTIAL:
+        info_severity = 'warning'
+      trace.append(
+        DecisionTraceEntry(
+          source='live_info',
+          label='Live info snapshot',
+          summary='Live info posture is {state}.'.format(
+            state=session.live_detection.snapshot.info_state.value,
+          ),
+          severity=info_severity,
+        )
+      )
+
+  if pit_inspection is not None:
+    pit_severity = 'info'
+    if pit_inspection.state in (
+      PitInspectionState.MALFORMED,
+      PitInspectionState.FAILED,
+    ):
+      pit_severity = 'danger'
+    elif pit_inspection.state == PitInspectionState.PARTIAL:
+      pit_severity = 'warning'
+    elif pit_inspection.package_alignment == PitPackageAlignment.MATCHED:
+      pit_severity = 'success'
+    trace.append(
+      DecisionTraceEntry(
+        source='pit',
+        label='PIT inspection',
+        summary=pit_inspection.summary,
+        severity=pit_severity,
+      )
+    )
+    if pit_inspection.package_alignment == PitPackageAlignment.MISMATCHED:
+      trace.append(
+        DecisionTraceEntry(
+          source='pit',
+          label='PIT/package alignment',
+          summary='Observed PIT fingerprint does not match the reviewed package fingerprint.',
+          severity='danger',
+        )
+      )
 
   for signal in _top_preflight_signals(report):
     trace.append(
@@ -870,6 +1225,7 @@ def _build_log_lines(
   session: PlatformSession,
   report: PreflightReport,
   package_assessment: Optional[PackageManifestAssessment],
+  pit_inspection: Optional[PitInspection],
   transport_trace: Optional[HeimdallNormalizedTrace],
   reviewed_flash_plan: Optional[ReviewedFlashPlan],
   transcript: TranscriptEvidence,
@@ -899,6 +1255,84 @@ def _build_log_lines(
         name=device_resolution.marketing_name or 'unknown',
       )
     )
+  if session.live_detection.state != LiveDetectionState.UNHYDRATED:
+    lines.append(
+      '[LIVE-DETECT] state={state} source={source} fallback={fallback}'.format(
+        state=session.live_detection.state.value,
+        source=(
+          session.live_detection.source.value
+          if session.live_detection.source is not None
+          else 'none'
+        ),
+        fallback=session.live_detection.fallback_posture.value,
+      )
+    )
+    lines.append('[LIVE-SUMMARY] {summary}'.format(
+      summary=session.live_detection.summary,
+    ))
+    if session.live_detection.snapshot is not None:
+      lines.append(
+        '[LIVE-IDENTITY] serial={serial} product={product} mode={mode} support={support}'.format(
+          serial=session.live_detection.snapshot.serial,
+          product=session.live_detection.snapshot.product_code or 'unknown',
+          mode=session.live_detection.snapshot.mode,
+          support=session.live_detection.snapshot.support_posture.value,
+        )
+      )
+      lines.append(
+        '[LIVE-INFO] posture={state} manufacturer={manufacturer} android={android} security_patch={patch}'.format(
+          state=session.live_detection.snapshot.info_state.value,
+          manufacturer=session.live_detection.snapshot.manufacturer or 'unknown',
+          android=session.live_detection.snapshot.android_version or 'unknown',
+          patch=session.live_detection.snapshot.security_patch or 'unknown',
+        )
+      )
+  if session.inspection.posture != InspectionWorkflowPosture.UNINSPECTED:
+    lines.append(
+      '[INSPECTION] posture={posture} detect_ran={detect_ran} info_ran={info_ran} pit_ran={pit_ran} evidence_ready={ready}'.format(
+        posture=session.inspection.posture.value,
+        detect_ran='yes' if session.inspection.detect_ran else 'no',
+        info_ran='yes' if session.inspection.info_ran else 'no',
+        pit_ran='yes' if session.inspection.pit_ran else 'no',
+        ready='yes' if session.inspection.evidence_ready else 'no',
+      )
+    )
+    lines.append('[INSPECTION-SUMMARY] {summary}'.format(
+      summary=session.inspection.summary,
+    ))
+    lines.append('[INSPECTION-NEXT] {action}'.format(
+      action=session.inspection.next_action,
+    ))
+    for boundary in session.inspection.action_boundaries[:1]:
+      lines.append('[INSPECTION-BOUNDARY] {boundary}'.format(
+        boundary=boundary,
+      ))
+
+  if pit_inspection is not None:
+    lines.append(
+      '[PIT] state={state} source={source} entries={entries} package_alignment={alignment}'.format(
+        state=pit_inspection.state.value,
+        source=(pit_inspection.source.value if pit_inspection.source is not None else 'none'),
+        entries=pit_inspection.entry_count,
+        alignment=pit_inspection.package_alignment.value,
+      )
+    )
+    lines.append('[PIT-SUMMARY] {summary}'.format(summary=pit_inspection.summary))
+    if pit_inspection.observed_pit_fingerprint is not None:
+      lines.append(
+        '[PIT-FINGERPRINT] observed={observed} reviewed={reviewed}'.format(
+          observed=pit_inspection.observed_pit_fingerprint,
+          reviewed=pit_inspection.reviewed_pit_fingerprint or 'unknown',
+        )
+      )
+    if pit_inspection.partition_names:
+      lines.append(
+        '[PIT-PARTITIONS] {partitions}'.format(
+          partitions=', '.join(pit_inspection.partition_names),
+        )
+      )
+    for guidance in pit_inspection.operator_guidance[:1]:
+      lines.append('[PIT-GUIDANCE] {guidance}'.format(guidance=guidance))
 
   for signal in _top_preflight_signals(report):
     lines.append(

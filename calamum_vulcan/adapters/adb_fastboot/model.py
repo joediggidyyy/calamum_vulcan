@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import field
 from enum import Enum
 from typing import Any
 from typing import Dict
@@ -23,6 +24,7 @@ class AndroidToolsCapability(str, Enum):
 
   DETECT_ADB_DEVICES = 'detect_adb_devices'
   DETECT_FASTBOOT_DEVICES = 'detect_fastboot_devices'
+  READ_DEVICE_INFO = 'read_device_info'
   REBOOT_TO_MODE = 'reboot_to_mode'
 
 
@@ -31,6 +33,7 @@ class AndroidToolsOperation(str, Enum):
 
   ADB_DEVICES = 'adb_devices'
   FASTBOOT_DEVICES = 'fastboot_devices'
+  ADB_GETPROP = 'adb_getprop'
   ADB_REBOOT = 'adb_reboot'
   FASTBOOT_REBOOT = 'fastboot_reboot'
 
@@ -119,6 +122,7 @@ class AndroidToolsNormalizedTrace:
   summary: str
   exit_code: int
   detected_devices: Tuple[AndroidDeviceRecord, ...] = ()
+  observed_properties: Dict[str, str] = field(default_factory=dict)
   notes: Tuple[str, ...] = ()
   stdout_lines: Tuple[str, ...] = ()
   stderr_lines: Tuple[str, ...] = ()

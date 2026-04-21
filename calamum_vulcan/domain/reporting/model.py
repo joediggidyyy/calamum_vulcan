@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Any
 from typing import Dict
 from typing import Optional
 from typing import Tuple
 
 
-REPORT_SCHEMA_VERSION = '0.2.0'
+REPORT_SCHEMA_VERSION = '0.3.0-fs3-05'
 REPORT_EXPORT_TARGETS = ('json', 'markdown')
 
 REQUIRED_SESSION_REPORT_FIELDS = (
@@ -21,7 +22,9 @@ REQUIRED_SESSION_REPORT_FIELDS = (
   'session_phase',
   'summary',
   'host',
+  'inspection',
   'device',
+  'pit',
   'package',
   'flash_plan',
   'preflight',
@@ -49,6 +52,58 @@ class HostEnvironmentEvidence:
 
 
 @dataclass(frozen=True)
+class InspectionWorkflowEvidence:
+  """Inspect-only read-side workflow posture carried into reporting."""
+
+  posture: str
+  summary: str
+  detect_ran: bool
+  info_ran: bool
+  pit_ran: bool
+  evidence_ready: bool
+  next_action: str
+  read_side_only: bool = True
+  action_boundaries: Tuple[str, ...] = ()
+  notes: Tuple[str, ...] = ()
+  captured_at_utc: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class LiveDeviceEvidence:
+  """Live detection and identity fields carried into the reporting layer."""
+
+  state: str
+  summary: str
+  source: Optional[str]
+  source_labels: Tuple[str, ...] = ()
+  fallback_posture: str = 'not_needed'
+  fallback_reason: Optional[str] = None
+  device_present: bool = False
+  command_ready: bool = False
+  support_posture: str = 'identity_incomplete'
+  serial: Optional[str] = None
+  transport: Optional[str] = None
+  product_code: Optional[str] = None
+  canonical_product_code: Optional[str] = None
+  marketing_name: Optional[str] = None
+  registry_match_kind: str = 'unknown'
+  mode: Optional[str] = None
+  info_state: str = 'not_collected'
+  info_source_label: Optional[str] = None
+  manufacturer: Optional[str] = None
+  brand: Optional[str] = None
+  android_version: Optional[str] = None
+  build_id: Optional[str] = None
+  security_patch: Optional[str] = None
+  build_fingerprint: Optional[str] = None
+  bootloader_version: Optional[str] = None
+  build_tags: Optional[str] = None
+  capability_hints: Tuple[str, ...] = ()
+  operator_guidance: Tuple[str, ...] = ()
+  notes: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class DeviceEvidence:
   """Device identity fields carried into the reporting layer."""
 
@@ -61,6 +116,38 @@ class DeviceEvidence:
   mode: Optional[str]
   mode_entry_instructions: Tuple[str, ...] = ()
   known_quirks: Tuple[str, ...] = ()
+  live: LiveDeviceEvidence = field(
+    default_factory=lambda: LiveDeviceEvidence(
+      state='unhydrated',
+      summary='No live device probe has run yet.',
+      source=None,
+    )
+  )
+
+
+@dataclass(frozen=True)
+class PitEvidence:
+  """PIT inspection fields carried into the reporting layer."""
+
+  schema_version: str
+  state: str
+  source: Optional[str]
+  summary: str
+  fallback_posture: str = 'not_needed'
+  fallback_reason: Optional[str] = None
+  observed_product_code: Optional[str] = None
+  canonical_product_code: Optional[str] = None
+  marketing_name: Optional[str] = None
+  registry_match_kind: str = 'unknown'
+  observed_pit_fingerprint: Optional[str] = None
+  reviewed_pit_fingerprint: Optional[str] = None
+  package_alignment: str = 'not_reviewed'
+  device_alignment: str = 'not_provided'
+  download_path: Optional[str] = None
+  entry_count: int = 0
+  partition_names: Tuple[str, ...] = ()
+  notes: Tuple[str, ...] = ()
+  operator_guidance: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -201,7 +288,9 @@ class SessionEvidenceReport:
   session_phase: str
   summary: str
   host: HostEnvironmentEvidence
+  inspection: InspectionWorkflowEvidence
   device: DeviceEvidence
+  pit: PitEvidence
   package: PackageEvidence
   flash_plan: FlashPlanEvidence
   preflight: PreflightEvidence

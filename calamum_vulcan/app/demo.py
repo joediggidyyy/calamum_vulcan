@@ -15,8 +15,11 @@ from calamum_vulcan.adapters.heimdall import run_bounded_heimdall_flash_session
 from calamum_vulcan.domain.flash_plan import build_reviewed_flash_plan
 from calamum_vulcan.domain.package import PackageManifestAssessment
 from calamum_vulcan.domain.package import assess_package_manifest
+from calamum_vulcan.domain.pit import PitInspection
+from calamum_vulcan.domain.pit import build_pit_inspection
 from calamum_vulcan.domain.state import PlatformSession
 from calamum_vulcan.domain.state import replay_events
+from calamum_vulcan.fixtures import load_heimdall_pit_fixture
 from calamum_vulcan.fixtures import available_heimdall_process_fixtures
 from calamum_vulcan.fixtures import blocked_then_cleared_events
 from calamum_vulcan.fixtures import blocked_validation_events
@@ -64,6 +67,14 @@ SCENARIO_ADAPTER_FIXTURES = {
   'happy': 'flash-success',
   'failure': 'flash-failure',
   'resume': 'flash-no-reboot-resume',
+}  # type: Dict[str, str]
+
+SCENARIO_PIT_FIXTURES = {
+  'ready': 'pit-print-ready-g991u',
+  'blocked': 'pit-print-ready-g991u',
+  'happy': 'pit-print-ready-g973f',
+  'resume': 'pit-print-ready-g973f',
+  'failure': 'pit-print-ready-g973f',
 }  # type: Dict[str, str]
 
 TRANSPORT_SOURCES = ('state-fixture', 'heimdall-adapter')
@@ -116,6 +127,14 @@ def default_adapter_fixture_for_scenario(name: str) -> str:
   return SCENARIO_ADAPTER_FIXTURES[name]
 
 
+def default_pit_fixture_for_scenario(name: str) -> str:
+  """Return the default PIT fixture bound to one shell scenario."""
+
+  if name not in SCENARIO_PIT_FIXTURES:
+    raise KeyError('Scenario has no PIT fixture: {name}'.format(name=name))
+  return SCENARIO_PIT_FIXTURES[name]
+
+
 def build_demo_package_assessment(
   name: str,
   session: Optional[PlatformSession] = None,
@@ -152,6 +171,37 @@ def build_demo_adapter_trace(
     package_assessment=package_assessment,
   )
   return normalize_heimdall_result(command_plan, process_result)
+
+
+def build_demo_pit_inspection(
+  name: str,
+  session: Optional[PlatformSession] = None,
+  package_assessment: Optional[PackageManifestAssessment] = None,
+  pit_fixture_name: str = 'scenario-default',
+) -> Optional[PitInspection]:
+  """Return repo-owned PIT inspection truth for one supported demo scenario."""
+
+  if session is None:
+    session = build_demo_session(name)
+  fixture_name = pit_fixture_name
+  if fixture_name == 'scenario-default':
+    if name not in SCENARIO_PIT_FIXTURES:
+      return None
+    fixture_name = default_pit_fixture_for_scenario(name)
+  if package_assessment is None and name in SCENARIO_PACKAGE_FIXTURES:
+    package_assessment = build_demo_package_assessment(name, session=session)
+
+  process_result = load_heimdall_pit_fixture(fixture_name)
+  command_plan = build_command_plan_for_operation(
+    process_result.operation,
+    output_path='artifacts/device.pit',
+  )
+  trace = normalize_heimdall_result(command_plan, process_result)
+  return build_pit_inspection(
+    trace,
+    detected_product_code=session.product_code,
+    package_assessment=package_assessment,
+  )
 
 
 def build_demo_adapter_session(

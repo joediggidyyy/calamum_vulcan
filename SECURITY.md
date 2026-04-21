@@ -16,10 +16,10 @@ If you are unsure whether something is security-relevant, report it privately fi
 
 ## Supported release lines
 
-| Release line | Status |
-| --- | --- |
-| `main` | supported for coordinated disclosure |
-| latest tagged release boundary | supported |
+| Release line                      | Status                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------ |
+| `main`                            | supported for coordinated disclosure                                     |
+| latest tagged release boundary    | supported                                                                |
 | older tags or ad hoc local builds | best effort; you may be asked to retest on the latest supported boundary |
 
 The latest public package index release can lag behind the latest tagged repository boundary. Reports against either surface are still welcome.

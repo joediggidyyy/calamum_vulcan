@@ -3,6 +3,7 @@
 from .builder import available_adb_reboot_targets
 from .builder import available_fastboot_reboot_targets
 from .builder import build_adb_detect_command_plan
+from .builder import build_adb_device_info_command_plan
 from .builder import build_adb_reboot_command_plan
 from .builder import build_fastboot_detect_command_plan
 from .builder import build_fastboot_reboot_command_plan
@@ -33,6 +34,7 @@ __all__ = [
   'available_adb_reboot_targets',
   'available_fastboot_reboot_targets',
   'build_adb_detect_command_plan',
+  'build_adb_device_info_command_plan',
   'build_adb_reboot_command_plan',
   'build_fastboot_detect_command_plan',
   'build_fastboot_reboot_command_plan',

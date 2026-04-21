@@ -18,6 +18,7 @@ from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
 from calamum_vulcan.adapters.adb_fastboot import AndroidToolsProcessResult
 from calamum_vulcan.adapters.adb_fastboot import AndroidToolsTraceState
 from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_adb_reboot_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_fastboot_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_fastboot_reboot_command_plan
@@ -76,6 +77,30 @@ class AdbFastbootAdapterTests(unittest.TestCase):
     self.assertEqual(trace.state, AndroidToolsTraceState.DETECTED)
     self.assertEqual(trace.detected_devices[0].serial, 'R58N12345AB')
     self.assertEqual(trace.detected_devices[0].state, 'fastboot')
+
+  def test_adb_device_info_plan_and_normalization_surface_structured_properties(self) -> None:
+    command_plan = build_adb_device_info_command_plan(device_serial='R58N12345AB')
+    process_result = AndroidToolsProcessResult(
+      fixture_name='adb-info-ready',
+      operation=AndroidToolsOperation.ADB_GETPROP,
+      backend=AndroidToolsBackend.ADB,
+      exit_code=0,
+      stdout_lines=(
+        '[ro.product.manufacturer]: [samsung]',
+        '[ro.product.brand]: [samsung]',
+        '[ro.product.model]: [SM-G991U]',
+        '[ro.build.version.release]: [14]',
+        '[ro.build.version.security_patch]: [2026-04-05]',
+      ),
+    )
+
+    trace = normalize_android_tools_result(command_plan, process_result)
+
+    self.assertEqual(command_plan.arguments, ('-s', 'R58N12345AB', 'shell', 'getprop'))
+    self.assertEqual(trace.state, AndroidToolsTraceState.COMPLETED)
+    self.assertEqual(trace.observed_properties['ro.product.manufacturer'], 'samsung')
+    self.assertEqual(trace.observed_properties['ro.build.version.release'], '14')
+    self.assertTrue(any('read-side only' in note for note in trace.notes))
 
   def test_vendor_specific_download_reboot_plan_is_flagged(self) -> None:
     command_plan = build_adb_reboot_command_plan(

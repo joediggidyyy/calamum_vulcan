@@ -8,9 +8,12 @@ from .model import DecisionTraceEntry
 from .model import DeviceEvidence
 from .model import FlashPlanEvidence
 from .model import HostEnvironmentEvidence
+from .model import InspectionWorkflowEvidence
+from .model import LiveDeviceEvidence
 from .model import OPTIONAL_SESSION_REPORT_FIELDS
 from .model import OutcomeEvidence
 from .model import PackageEvidence
+from .model import PitEvidence
 from .model import PreflightEvidence
 from .model import REPORT_EXPORT_TARGETS
 from .model import REPORT_SCHEMA_VERSION
@@ -24,9 +27,12 @@ __all__ = [
   'DeviceEvidence',
   'FlashPlanEvidence',
   'HostEnvironmentEvidence',
+  'InspectionWorkflowEvidence',
+  'LiveDeviceEvidence',
   'OPTIONAL_SESSION_REPORT_FIELDS',
   'OutcomeEvidence',
   'PackageEvidence',
+  'PitEvidence',
   'PreflightEvidence',
   'REPORT_EXPORT_TARGETS',
   'REPORT_SCHEMA_VERSION',

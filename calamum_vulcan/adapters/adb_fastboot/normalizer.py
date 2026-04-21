@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Dict
 from typing import List
 from typing import Tuple
@@ -15,6 +16,9 @@ from .model import AndroidToolsProcessResult
 from .model import AndroidToolsTraceState
 
 
+GETPROP_PATTERN = re.compile(r'^\[(?P<key>[^\]]+)\]: \[(?P<value>.*)\]$')
+
+
 def normalize_android_tools_result(
   command_plan: AndroidToolsCommandPlan,
   process_result: AndroidToolsProcessResult,
@@ -26,6 +30,8 @@ def normalize_android_tools_result(
     return _normalize_adb_devices_result(command_plan, process_result)
   if operation == AndroidToolsOperation.FASTBOOT_DEVICES:
     return _normalize_fastboot_devices_result(command_plan, process_result)
+  if operation == AndroidToolsOperation.ADB_GETPROP:
+    return _normalize_adb_getprop_result(command_plan, process_result)
   return _normalize_reboot_result(command_plan, process_result)
 
 
@@ -111,6 +117,48 @@ def _normalize_fastboot_devices_result(
     summary='Fastboot detected {count} device(s).'.format(count=len(devices)),
     exit_code=process_result.exit_code,
     detected_devices=tuple(devices),
+    stdout_lines=process_result.stdout_lines,
+    stderr_lines=process_result.stderr_lines,
+  )
+
+
+def _normalize_adb_getprop_result(
+  command_plan: AndroidToolsCommandPlan,
+  process_result: AndroidToolsProcessResult,
+) -> AndroidToolsNormalizedTrace:
+  if process_result.exit_code not in command_plan.expected_exit_codes:
+    return _failed_trace(
+      command_plan,
+      process_result,
+      'ADB device info collection failed before a trustworthy property snapshot was produced.',
+    )
+
+  observed_properties = _parse_adb_getprop(process_result.stdout_lines)
+  notes = list(command_plan.notes)
+  if not observed_properties:
+    notes.append('ADB property query completed, but no structured getprop lines were captured.')
+    return AndroidToolsNormalizedTrace(
+      fixture_name=process_result.fixture_name,
+      command_plan=command_plan,
+      state=AndroidToolsTraceState.COMPLETED,
+      summary='ADB property query completed without structured device-info keys.',
+      exit_code=process_result.exit_code,
+      observed_properties=observed_properties,
+      notes=tuple(notes),
+      stdout_lines=process_result.stdout_lines,
+      stderr_lines=process_result.stderr_lines,
+    )
+
+  return AndroidToolsNormalizedTrace(
+    fixture_name=process_result.fixture_name,
+    command_plan=command_plan,
+    state=AndroidToolsTraceState.COMPLETED,
+    summary='ADB collected {count} structured property values for a bounded device-info snapshot.'.format(
+      count=len(observed_properties),
+    ),
+    exit_code=process_result.exit_code,
+    observed_properties=observed_properties,
+    notes=tuple(notes),
     stdout_lines=process_result.stdout_lines,
     stderr_lines=process_result.stderr_lines,
   )
@@ -235,6 +283,16 @@ def _parse_key_value_tokens(tokens: List[str]) -> Dict[str, str]:
     key, value = token.split(':', 1)
     details[key] = value
   return details
+
+
+def _parse_adb_getprop(stdout_lines: tuple[str, ...]) -> Dict[str, str]:
+  properties = {}  # type: Dict[str, str]
+  for line in stdout_lines:
+    match = GETPROP_PATTERN.match(line.strip())
+    if match is None:
+      continue
+    properties[match.group('key')] = match.group('value')
+  return properties
 
 
 def _failure_reason(process_result: AndroidToolsProcessResult) -> str:

@@ -10,6 +10,8 @@ from typing import Dict
 from typing import Optional
 from typing import Tuple
 
+from calamum_vulcan.domain.live_device import LiveDetectionSession
+
 
 class SessionPhase(str, Enum):
   """Operator-visible top-level phases for Sprint 0.1.0."""
@@ -43,6 +45,16 @@ class SessionEventType(str, Enum):
   EXECUTION_COMPLETED = 'execution_completed'
   EXECUTION_FAILED = 'execution_failed'
   RESET_SESSION = 'reset_session'
+
+
+class InspectionWorkflowPosture(str, Enum):
+  """Operator-facing posture for the inspect-only read-side workflow."""
+
+  UNINSPECTED = 'uninspected'
+  INSPECTING = 'inspecting'
+  READY = 'ready'
+  PARTIAL = 'partial'
+  FAILED = 'failed'
 
 
 class TransitionRejected(ValueError):
@@ -87,6 +99,25 @@ class PlatformEvent:
 
 
 @dataclass(frozen=True)
+class InspectionWorkflow:
+  """Repo-owned inspect-only posture carried alongside the reviewed session."""
+
+  posture: InspectionWorkflowPosture = InspectionWorkflowPosture.UNINSPECTED
+  summary: str = 'No inspect-only workflow has run yet.'
+  detect_ran: bool = False
+  info_ran: bool = False
+  pit_ran: bool = False
+  evidence_ready: bool = False
+  next_action: str = 'Run the inspect-only workflow to capture read-side evidence.'
+  action_boundaries: Tuple[str, ...] = (
+    'Inspect-only workflow remains read-side only and does not open a write path.',
+    'Successful detection or PIT review must not be treated as transport readiness.',
+  )
+  notes: Tuple[str, ...] = ()
+  captured_at_utc: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class PlatformSession:
   """The immutable session snapshot consumed by the future GUI shell."""
 
@@ -97,6 +128,10 @@ class PlatformSession:
   package_id: Optional[str] = None
   package_risk: Optional[str] = None
   mode: Optional[str] = None
+  live_detection: LiveDetectionSession = field(
+    default_factory=LiveDetectionSession.unhydrated
+  )
+  inspection: InspectionWorkflow = field(default_factory=InspectionWorkflow)
   failure_reason: Optional[str] = None
   last_event: Optional[SessionEventType] = None
   preflight_notes: Tuple[str, ...] = ()

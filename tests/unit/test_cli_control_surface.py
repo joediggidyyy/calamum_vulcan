@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout
 import io
+import json
 import runpy
 import sys
 from pathlib import Path
@@ -21,9 +22,47 @@ PROJECT_VERSION = tomllib.loads(
   (FINAL_EXAM_ROOT / 'pyproject.toml').read_text(encoding='utf-8')
 )['project']['version']
 
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsBackend
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsProcessResult
+from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
+from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
+from calamum_vulcan.adapters.heimdall import build_print_pit_command_plan
+from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
 from calamum_vulcan.app.__main__ import gui_main
 from calamum_vulcan.app.__main__ import main
+from calamum_vulcan.app.__main__ import _render_control_trace
 from calamum_vulcan.app.__main__ import _render_codesentinel_status_block
+from calamum_vulcan.domain.live_device import apply_live_device_info_trace
+from calamum_vulcan.domain.live_device import build_live_detection_session
+from calamum_vulcan.fixtures import load_heimdall_pit_fixture
+
+
+def _ready_adb_info_trace():
+  return normalize_android_tools_result(
+    build_adb_device_info_command_plan(device_serial='R58N12345AB'),
+    AndroidToolsProcessResult(
+      fixture_name='adb-info-ready',
+      operation=AndroidToolsOperation.ADB_GETPROP,
+      backend=AndroidToolsBackend.ADB,
+      exit_code=0,
+      stdout_lines=(
+        '[ro.product.manufacturer]: [samsung]',
+        '[ro.product.brand]: [samsung]',
+        '[ro.build.version.release]: [14]',
+        '[ro.build.version.security_patch]: [2026-04-05]',
+        '[ro.bootloader]: [G991USQS9HYD1]',
+      ),
+    ),
+  )
+
+
+def _ready_print_pit_trace():
+  return normalize_heimdall_result(
+    build_print_pit_command_plan(),
+    load_heimdall_pit_fixture('pit-print-ready-g991u'),
+  )
 
 
 class CliControlSurfaceTests(unittest.TestCase):
@@ -71,6 +110,150 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertEqual(exit_code, 0)
     self.assertIn('adb devices -l', output)
     self.assertIn('detect_adb_devices', output)
+
+  def test_render_control_trace_includes_repo_owned_live_detection_summary(self) -> None:
+    trace = normalize_android_tools_result(
+      build_adb_detect_command_plan(),
+      AndroidToolsProcessResult(
+        fixture_name='adb-ready',
+        operation=AndroidToolsOperation.ADB_DEVICES,
+        backend=AndroidToolsBackend.ADB,
+        exit_code=0,
+        stdout_lines=(
+          'List of devices attached',
+          'R58N12345AB\tdevice usb:1-1 product:dm3q model:SM_G991U device:dm3q',
+        ),
+      ),
+    )
+
+    live_detection = apply_live_device_info_trace(
+      build_live_detection_session(trace),
+      _ready_adb_info_trace(),
+    )
+
+    output = _render_control_trace(trace, 'text', live_detection=live_detection)
+
+    self.assertIn('live_detection state="detected"', output)
+    self.assertIn('source="adb"', output)
+    self.assertIn('live_identity serial="R58N12345AB"', output)
+    self.assertIn('marketing_name="Galaxy S21"', output)
+    self.assertIn('live_info posture="captured"', output)
+    self.assertIn('live_capability="bounded_info_snapshot_ready"', output)
+
+  def test_adb_detect_runs_bounded_info_enrichment_before_rendering_trace(self) -> None:
+    stream = io.StringIO()
+
+    with patch(
+      'calamum_vulcan.app.__main__.execute_android_tools_command',
+      side_effect=(
+        normalize_android_tools_result(
+          build_adb_detect_command_plan(),
+          AndroidToolsProcessResult(
+            fixture_name='adb-ready',
+            operation=AndroidToolsOperation.ADB_DEVICES,
+            backend=AndroidToolsBackend.ADB,
+            exit_code=0,
+            stdout_lines=(
+              'List of devices attached',
+              'R58N12345AB\tdevice usb:1-1 product:dm3q model:SM_G991U device:dm3q',
+            ),
+          ),
+        ),
+        _ready_adb_info_trace(),
+      ),
+    ) as mocked_execute:
+      with redirect_stdout(stream):
+        exit_code = main(['--adb-detect'])
+
+    output = stream.getvalue()
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(mocked_execute.call_count, 2)
+    self.assertIn('live_info posture="captured"', output)
+    self.assertIn('live_guidance=', output)
+
+  def test_inspect_device_runs_read_side_lane_without_write_ready_theater(self) -> None:
+    stream = io.StringIO()
+
+    with patch(
+      'calamum_vulcan.app.__main__.execute_android_tools_command',
+      side_effect=(
+        normalize_android_tools_result(
+          build_adb_detect_command_plan(),
+          AndroidToolsProcessResult(
+            fixture_name='adb-ready',
+            operation=AndroidToolsOperation.ADB_DEVICES,
+            backend=AndroidToolsBackend.ADB,
+            exit_code=0,
+            stdout_lines=(
+              'List of devices attached',
+              'R58N12345AB\tdevice usb:1-1 product:dm3q model:SM_G991U device:dm3q',
+            ),
+          ),
+        ),
+        _ready_adb_info_trace(),
+      ),
+    ) as mocked_android, patch(
+      'calamum_vulcan.app.__main__.execute_heimdall_command',
+      return_value=_ready_print_pit_trace(),
+    ) as mocked_heimdall:
+      with redirect_stdout(stream):
+        exit_code = main(['--inspect-device'])
+
+    output = stream.getvalue()
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(mocked_android.call_count, 2)
+    mocked_heimdall.assert_called_once()
+    self.assertIn('inspection_result posture="ready"', output)
+    self.assertIn('write_ready="no"', output)
+    self.assertIn('inspection_boundary=', output)
+    self.assertIn('inspection_pit state="captured"', output)
+
+  def test_inspect_device_can_export_json_evidence_with_inspection_block(self) -> None:
+    stream = io.StringIO()
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      output_path = Path(temp_dir) / 'inspection-evidence.json'
+
+      with patch(
+        'calamum_vulcan.app.__main__.execute_android_tools_command',
+        side_effect=(
+          normalize_android_tools_result(
+            build_adb_detect_command_plan(),
+            AndroidToolsProcessResult(
+              fixture_name='adb-ready',
+              operation=AndroidToolsOperation.ADB_DEVICES,
+              backend=AndroidToolsBackend.ADB,
+              exit_code=0,
+              stdout_lines=(
+                'List of devices attached',
+                'R58N12345AB\tdevice usb:1-1 product:dm3q model:SM_G991U device:dm3q',
+              ),
+            ),
+          ),
+          _ready_adb_info_trace(),
+        ),
+      ), patch(
+        'calamum_vulcan.app.__main__.execute_heimdall_command',
+        return_value=_ready_print_pit_trace(),
+      ):
+        with redirect_stdout(stream):
+          exit_code = main(
+            [
+              '--inspect-device',
+              '--evidence-output',
+              str(output_path),
+              '--evidence-format',
+              'json',
+            ]
+          )
+
+      payload = json.loads(output_path.read_text(encoding='utf-8'))
+      self.assertEqual(exit_code, 0)
+      self.assertTrue(output_path.exists())
+      self.assertEqual(payload['inspection']['posture'], 'ready')
+      self.assertTrue(payload['inspection']['read_side_only'])
+      self.assertTrue(payload['inspection']['pit_ran'])
+      self.assertTrue(payload['outcome']['export_ready'])
 
   def test_gui_main_survives_missing_console_streams(self) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -123,8 +306,10 @@ class CliControlSurfaceTests(unittest.TestCase):
     output = stream.getvalue()
     self.assertEqual(exit_code, 0)
     self.assertIn('Calamum Vulcan GUI launch status', output)
-    self.assertIn('status: confirm', output)
-    self.assertIn('decision: gui_launch_ready', output)
+    self.assertIn('\n\ngenerated_at_utc:', output)
+    self.assertIn('status:           confirm', output)
+    self.assertIn('decision:         gui_launch_ready', output)
+    self.assertIn('decision:         gui_launch_ready\n\nCalamum Vulcan GUI exit status', output)
     self.assertNotIn('Summary', output)
     self.assertNotIn('Review state', output)
 
@@ -141,7 +326,8 @@ class CliControlSurfaceTests(unittest.TestCase):
       )
 
     self.assertIn('\x1b[96mCalamum Vulcan GUI\x1b[0m launch status', output)
-    self.assertIn('status: confirm', output)
+    self.assertIn('\n\ngenerated_at_utc:', output)
+    self.assertIn('status:           confirm', output)
     self.assertNotIn('Summary', output)
 
   def test_gui_main_honors_process_argv_when_wrapper_invokes_without_explicit_args(self) -> None:
@@ -172,7 +358,8 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertEqual(exit_code, 0)
     spawn_detached.assert_called_once()
     launch.assert_not_called()
-    self.assertIn('decision: gui_launch_ready', output)
+    self.assertIn('decision:         gui_launch_ready', output)
+    self.assertTrue(output.endswith('\n\n'))
     self.assertNotIn('gui_session_closed_cleanly', output)
 
   def test_gui_main_keeps_duration_bounded_launch_attached_for_validation(self) -> None:
@@ -192,7 +379,7 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertEqual(exit_code, 0)
     spawn_detached.assert_not_called()
     launch.assert_called_once()
-    self.assertIn('decision: gui_session_closed_cleanly', output)
+    self.assertIn('decision:         gui_session_closed_cleanly', output)
 
   def test_launch_shell_module_forwards_process_args_to_gui_main(self) -> None:
     captured_argv = []

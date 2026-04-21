@@ -1,5 +1,7 @@
 """Fixture scenarios for deterministic Sprint 0.1.0 validation."""
 
+from .heimdall_pit_fixtures import available_heimdall_pit_fixtures
+from .heimdall_pit_fixtures import load_heimdall_pit_fixture
 from .heimdall_process_fixtures import available_heimdall_process_fixtures
 from .heimdall_process_fixtures import load_heimdall_process_fixture
 from .package_manifest_fixtures import available_package_manifest_fixtures
@@ -13,12 +15,14 @@ from .state_scenarios import package_first_events
 from .state_scenarios import resume_needed_events
 
 __all__ = [
+  'available_heimdall_pit_fixtures',
   'available_heimdall_process_fixtures',
   'available_package_manifest_fixtures',
   'blocked_then_cleared_events',
   'blocked_validation_events',
   'execution_failure_events',
   'happy_path_events',
+  'load_heimdall_pit_fixture',
   'load_heimdall_process_fixture',
   'load_package_manifest_fixture',
   'package_first_events',

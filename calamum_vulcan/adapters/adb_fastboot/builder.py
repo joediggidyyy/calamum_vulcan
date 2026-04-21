@@ -61,6 +61,24 @@ def build_fastboot_detect_command_plan(
   )
 
 
+def build_adb_device_info_command_plan(
+  device_serial: Optional[str] = None,
+) -> AndroidToolsCommandPlan:
+  """Build the sanctioned `adb shell getprop` command plan."""
+
+  arguments = _prefixed_serial_arguments(device_serial) + ('shell', 'getprop')
+  return _command_plan(
+    AndroidToolsCapability.READ_DEVICE_INFO,
+    AndroidToolsOperation.ADB_GETPROP,
+    AndroidToolsBackend.ADB,
+    arguments,
+    target_serial=device_serial,
+    notes=(
+      'This bounded ADB property probe is read-side only and does not imply flash readiness.',
+    ),
+  )
+
+
 def build_adb_reboot_command_plan(
   target: str,
   device_serial: Optional[str] = None,

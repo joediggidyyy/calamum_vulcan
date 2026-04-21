@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import sys
 from pathlib import Path
@@ -15,13 +16,23 @@ if str(FINAL_EXAM_ROOT) not in sys.path:
 
 from calamum_vulcan.app.demo import build_demo_package_assessment
 from calamum_vulcan.app.demo import build_demo_adapter_session
+from calamum_vulcan.app.demo import build_demo_pit_inspection
 from calamum_vulcan.app.demo import build_demo_session
 from calamum_vulcan.app.demo import scenario_label
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsBackend
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsProcessResult
+from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
+from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
+from calamum_vulcan.domain.live_device import apply_live_device_info_trace
+from calamum_vulcan.domain.live_device import build_live_detection_session
 from calamum_vulcan.domain.reporting import REPORT_EXPORT_TARGETS
 from calamum_vulcan.domain.reporting import build_session_evidence_report
 from calamum_vulcan.domain.reporting import render_session_evidence_markdown
 from calamum_vulcan.domain.reporting import serialize_session_evidence_json
 from calamum_vulcan.domain.reporting import write_session_evidence_report
+from calamum_vulcan.domain.state import build_inspection_workflow
 
 
 class ReportingContractTests(unittest.TestCase):
@@ -30,10 +41,16 @@ class ReportingContractTests(unittest.TestCase):
   def test_ready_report_serializes_with_package_and_preflight_context(self) -> None:
     session = build_demo_session('ready')
     package_assessment = build_demo_package_assessment('ready', session=session)
+    pit_inspection = build_demo_pit_inspection(
+      'ready',
+      session=session,
+      package_assessment=package_assessment,
+    )
     report = build_session_evidence_report(
       session,
       scenario_name=scenario_label('ready'),
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
       captured_at_utc='2026-04-18T20:15:00Z',
     )
 
@@ -47,15 +64,161 @@ class ReportingContractTests(unittest.TestCase):
     self.assertTrue(payload['flash_plan']['ready_for_transport'])
     self.assertEqual(payload['flash_plan']['reboot_policy'], 'standard')
     self.assertIn('RECOVERY', payload['flash_plan']['partition_targets'])
+    self.assertEqual(payload['pit']['state'], 'captured')
+    self.assertEqual(payload['pit']['package_alignment'], 'matched')
+    self.assertEqual(payload['pit']['observed_pit_fingerprint'], 'PIT-G991U-READY-001')
     self.assertGreaterEqual(len(payload['decision_trace']), 3)
     self.assertEqual(payload['transport']['state'], 'not_invoked')
+    self.assertIn('live', payload['device'])
+    self.assertEqual(payload['device']['live']['state'], 'unhydrated')
+
+  def test_report_exports_live_detection_identity_when_present(self) -> None:
+    session = build_demo_session('ready')
+    live_trace = normalize_android_tools_result(
+      build_adb_detect_command_plan(),
+      AndroidToolsProcessResult(
+        fixture_name='adb-ready',
+        operation=AndroidToolsOperation.ADB_DEVICES,
+        backend=AndroidToolsBackend.ADB,
+        exit_code=0,
+        stdout_lines=(
+          'List of devices attached',
+          'R58N12345AB\tdevice usb:1-1 product:dm3q model:SM_G991U device:dm3q',
+        ),
+      ),
+    )
+    live_detection = build_live_detection_session(live_trace)
+    live_info_trace = normalize_android_tools_result(
+      build_adb_device_info_command_plan(device_serial='R58N12345AB'),
+      AndroidToolsProcessResult(
+        fixture_name='adb-info-ready',
+        operation=AndroidToolsOperation.ADB_GETPROP,
+        backend=AndroidToolsBackend.ADB,
+        exit_code=0,
+        stdout_lines=(
+          '[ro.product.manufacturer]: [samsung]',
+          '[ro.product.brand]: [samsung]',
+          '[ro.build.version.release]: [14]',
+          '[ro.build.version.security_patch]: [2026-04-05]',
+          '[ro.bootloader]: [G991USQS9HYD1]',
+        ),
+      ),
+    )
+    session = replace(
+      session,
+      live_detection=apply_live_device_info_trace(live_detection, live_info_trace),
+    )
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    pit_inspection = build_demo_pit_inspection(
+      'ready',
+      session=session,
+      package_assessment=package_assessment,
+    )
+
+    report = build_session_evidence_report(
+      session,
+      scenario_name='Ready report with live detection',
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      captured_at_utc='2026-04-18T20:16:00Z',
+    )
+
+    payload = json.loads(serialize_session_evidence_json(report))
+    markdown = render_session_evidence_markdown(report)
+
+    self.assertEqual(payload['device']['live']['state'], 'detected')
+    self.assertEqual(payload['device']['live']['source'], 'adb')
+    self.assertTrue(payload['device']['live']['device_present'])
+    self.assertEqual(payload['device']['live']['marketing_name'], 'Galaxy S21')
+    self.assertEqual(payload['device']['live']['info_state'], 'captured')
+    self.assertEqual(payload['device']['live']['android_version'], '14')
+    self.assertIn('bounded_info_snapshot_ready', payload['device']['live']['capability_hints'])
+    self.assertEqual(payload['pit']['state'], 'captured')
+    self.assertIn('live detection state', markdown)
+    self.assertIn('### PIT inspection', markdown)
+    self.assertIn('live marketing name', markdown)
+    self.assertIn('live android version', markdown)
+
+  def test_report_exports_inspection_workflow_when_present(self) -> None:
+    session = build_demo_session('ready')
+    live_trace = normalize_android_tools_result(
+      build_adb_detect_command_plan(),
+      AndroidToolsProcessResult(
+        fixture_name='adb-ready',
+        operation=AndroidToolsOperation.ADB_DEVICES,
+        backend=AndroidToolsBackend.ADB,
+        exit_code=0,
+        stdout_lines=(
+          'List of devices attached',
+          'R58N12345AB\tdevice usb:1-1 product:dm3q model:SM_G991U device:dm3q',
+        ),
+      ),
+    )
+    live_detection = build_live_detection_session(live_trace)
+    live_info_trace = normalize_android_tools_result(
+      build_adb_device_info_command_plan(device_serial='R58N12345AB'),
+      AndroidToolsProcessResult(
+        fixture_name='adb-info-ready',
+        operation=AndroidToolsOperation.ADB_GETPROP,
+        backend=AndroidToolsBackend.ADB,
+        exit_code=0,
+        stdout_lines=(
+          '[ro.product.manufacturer]: [samsung]',
+          '[ro.product.brand]: [samsung]',
+          '[ro.build.version.release]: [14]',
+          '[ro.build.version.security_patch]: [2026-04-05]',
+          '[ro.bootloader]: [G991USQS9HYD1]',
+        ),
+      ),
+    )
+    session = replace(
+      session,
+      live_detection=apply_live_device_info_trace(live_detection, live_info_trace),
+    )
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    pit_inspection = build_demo_pit_inspection(
+      'ready',
+      session=session,
+      package_assessment=package_assessment,
+    )
+    session = replace(
+      session,
+      inspection=build_inspection_workflow(
+        session.live_detection,
+        pit_inspection=pit_inspection,
+        captured_at_utc='2026-04-20T22:35:00Z',
+      ),
+    )
+
+    report = build_session_evidence_report(
+      session,
+      scenario_name='Ready report with inspection workflow',
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      captured_at_utc='2026-04-20T22:35:00Z',
+    )
+
+    payload = json.loads(serialize_session_evidence_json(report))
+    markdown = render_session_evidence_markdown(report)
+
+    self.assertEqual(payload['inspection']['posture'], 'ready')
+    self.assertTrue(payload['inspection']['pit_ran'])
+    self.assertTrue(payload['inspection']['evidence_ready'])
+    self.assertIn('### Inspection workflow', markdown)
+    self.assertIn('Inspect-only workflow captured', markdown)
 
   def test_failure_report_carries_recovery_guidance_into_markdown(self) -> None:
     session, package_assessment, transport_trace = build_demo_adapter_session('failure')
+    pit_inspection = build_demo_pit_inspection(
+      'failure',
+      session=session,
+      package_assessment=package_assessment,
+    )
     report = build_session_evidence_report(
       session,
       scenario_name=scenario_label('failure'),
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
       transport_trace=transport_trace,
       captured_at_utc='2026-04-18T20:20:00Z',
     )
@@ -64,6 +227,7 @@ class ReportingContractTests(unittest.TestCase):
     self.assertEqual(report.outcome.outcome, 'failed')
     self.assertIn('Recovery guidance', markdown)
     self.assertIn('### Flash plan', markdown)
+    self.assertIn('### PIT inspection', markdown)
     self.assertIn('### Transcript', markdown)
     self.assertIn('Stabilize the direct USB path', markdown)
     self.assertIn('manual no-reboot recovery handoff', markdown)
@@ -78,10 +242,16 @@ class ReportingContractTests(unittest.TestCase):
       session=session,
       package_fixture_name='incomplete',
     )
+    pit_inspection = build_demo_pit_inspection(
+      'ready',
+      session=session,
+      package_assessment=package_assessment,
+    )
     report = build_session_evidence_report(
       session,
       scenario_name='Incomplete manifest review',
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
       captured_at_utc='2026-04-18T20:25:00Z',
     )
 
@@ -93,10 +263,16 @@ class ReportingContractTests(unittest.TestCase):
 
   def test_adapter_backed_report_carries_transport_trace(self) -> None:
     session, package_assessment, transport_trace = build_demo_adapter_session('happy')
+    pit_inspection = build_demo_pit_inspection(
+      'happy',
+      session=session,
+      package_assessment=package_assessment,
+    )
     report = build_session_evidence_report(
       session,
       scenario_name=scenario_label('happy'),
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
       transport_trace=transport_trace,
       captured_at_utc='2026-04-18T20:27:00Z',
     )
@@ -119,10 +295,16 @@ class ReportingContractTests(unittest.TestCase):
       session=session,
       package_fixture_name='suspicious-review',
     )
+    pit_inspection = build_demo_pit_inspection(
+      'ready',
+      session=session,
+      package_assessment=package_assessment,
+    )
     report = build_session_evidence_report(
       session,
       scenario_name='Suspicious review lane',
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
       captured_at_utc='2026-04-18T20:28:00Z',
     )
 
@@ -138,10 +320,16 @@ class ReportingContractTests(unittest.TestCase):
   def test_writer_persists_markdown_report_to_disk(self) -> None:
     session = build_demo_session('blocked')
     package_assessment = build_demo_package_assessment('blocked', session=session)
+    pit_inspection = build_demo_pit_inspection(
+      'blocked',
+      session=session,
+      package_assessment=package_assessment,
+    )
     report = build_session_evidence_report(
       session,
       scenario_name=scenario_label('blocked'),
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
       captured_at_utc='2026-04-18T20:30:00Z',
     )
 
@@ -159,13 +347,20 @@ class ReportingContractTests(unittest.TestCase):
     self.assertIn('Calamum Vulcan session evidence', contents)
     self.assertIn('Blocked preflight review', contents)
     self.assertIn('### Flash plan', contents)
+    self.assertIn('### PIT inspection', contents)
 
   def test_writer_persists_transport_transcript_for_adapter_backed_report(self) -> None:
     session, package_assessment, transport_trace = build_demo_adapter_session('failure')
+    pit_inspection = build_demo_pit_inspection(
+      'failure',
+      session=session,
+      package_assessment=package_assessment,
+    )
     report = build_session_evidence_report(
       session,
       scenario_name=scenario_label('failure'),
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
       transport_trace=transport_trace,
       captured_at_utc='2026-04-19T01:10:00Z',
     )

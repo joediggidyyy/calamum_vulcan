@@ -16,15 +16,25 @@ from calamum_vulcan.app.demo import available_scenarios
 from calamum_vulcan.app.demo import available_transport_sources
 from calamum_vulcan.app.demo import build_demo_adapter_session
 from calamum_vulcan.app.demo import build_demo_package_assessment
+from calamum_vulcan.app.demo import build_demo_pit_inspection
 from calamum_vulcan.app.demo import build_demo_session
 from calamum_vulcan.app.demo import scenario_label
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsBackend
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
+from calamum_vulcan.adapters.adb_fastboot import AndroidToolsProcessResult
+from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
+from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
 from calamum_vulcan.app.view_models import PANEL_TITLES
 from calamum_vulcan.app.view_models import LiveCompanionDeviceViewModel
 from calamum_vulcan.app.view_models import build_shell_view_model
 from calamum_vulcan.app.view_models import describe_shell
+from calamum_vulcan.domain.live_device import apply_live_device_info_trace
+from calamum_vulcan.domain.live_device import build_live_detection_session
 from calamum_vulcan.domain.preflight import PreflightGate
 from calamum_vulcan.domain.preflight import PreflightInput
 from calamum_vulcan.domain.preflight import evaluate_preflight
+from calamum_vulcan.domain.state import build_inspection_workflow
 from calamum_vulcan.domain.state import replay_events
 from calamum_vulcan.fixtures import load_package_manifest_fixture
 from calamum_vulcan.fixtures import happy_path_events
@@ -125,7 +135,7 @@ class ShellViewModelTests(unittest.TestCase):
     self.assertIn('No live device is currently detected.', model.panels[0].summary)
     self.assertEqual(package_metrics['Loaded'], 'yes')
 
-  def test_live_adb_overlay_keeps_review_phase_but_marks_device_pill_ready(self) -> None:
+  def test_live_adb_overlay_promotes_phase_display_and_keeps_review_target_explicit(self) -> None:
     session = build_demo_session('no-device')
     live_device = LiveCompanionDeviceViewModel(
       backend='adb',
@@ -143,11 +153,149 @@ class ShellViewModelTests(unittest.TestCase):
     )
 
     pill_map = {pill.label: pill for pill in model.status_pills}
+    transport_metrics = {
+      metric.label: metric.value for metric in model.panels[3].metrics
+    }
 
-    self.assertEqual(model.phase_label, 'No Device')
+    self.assertEqual(model.phase_label, 'ADB Device Detected')
     self.assertEqual(pill_map['Device'].value, 'SM_A037U via ADB')
     self.assertEqual(pill_map['Device'].tone, 'success')
-    self.assertIn('reviewed session remains No Device', model.panels[0].summary)
+    self.assertEqual(pill_map['Phase'].value, 'ADB Device Detected')
+    self.assertEqual(transport_metrics['Phase'], 'ADB Device Detected')
+    self.assertIn(
+      'reviewed target posture remains No Download-Mode Target',
+      model.panels[0].summary,
+    )
+    self.assertTrue(
+      any(
+        'Reviewed target posture: No Download-Mode Target' in line
+        for line in model.panels[0].detail_lines
+      )
+    )
+
+  def test_repo_owned_live_info_snapshot_surfaces_capability_and_guidance_lines(self) -> None:
+    session = build_demo_session('no-device')
+    live_detection = build_live_detection_session(
+      normalize_android_tools_result(
+        build_adb_detect_command_plan(),
+        AndroidToolsProcessResult(
+          fixture_name='adb-ready',
+          operation=AndroidToolsOperation.ADB_DEVICES,
+          backend=AndroidToolsBackend.ADB,
+          exit_code=0,
+          stdout_lines=(
+            'List of devices attached',
+            'R58N12345AB\tdevice usb:1-1 product:dm3q model:SM_G991U device:dm3q',
+          ),
+        ),
+      )
+    )
+    live_detection = apply_live_device_info_trace(
+      live_detection,
+      normalize_android_tools_result(
+        build_adb_device_info_command_plan(device_serial='R58N12345AB'),
+        AndroidToolsProcessResult(
+          fixture_name='adb-info-ready',
+          operation=AndroidToolsOperation.ADB_GETPROP,
+          backend=AndroidToolsBackend.ADB,
+          exit_code=0,
+          stdout_lines=(
+            '[ro.product.manufacturer]: [samsung]',
+            '[ro.product.brand]: [samsung]',
+            '[ro.build.version.release]: [14]',
+            '[ro.build.version.security_patch]: [2026-04-05]',
+            '[ro.bootloader]: [G991USQS9HYD1]',
+          ),
+        ),
+      ),
+    )
+
+    model = build_shell_view_model(
+      replace(session, live_detection=live_detection),
+      scenario_name='Live info overlay',
+      package_assessment=None,
+    )
+
+    self.assertIn('bounded read-side device info is now captured', model.panels[0].summary)
+    self.assertTrue(
+      any('Android version: 14' in line for line in model.panels[0].detail_lines)
+    )
+    self.assertTrue(
+      any('Capability hint: bounded info snapshot ready' in line for line in model.panels[0].detail_lines)
+    )
+    self.assertTrue(
+      any('Next step:' in line for line in model.panels[0].detail_lines)
+    )
+
+  def test_inspect_device_action_and_evidence_panel_surface_read_side_lane(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    pit_inspection = build_demo_pit_inspection(
+      'ready',
+      session=session,
+      package_assessment=package_assessment,
+    )
+    live_detection = build_live_detection_session(
+      normalize_android_tools_result(
+        build_adb_detect_command_plan(),
+        AndroidToolsProcessResult(
+          fixture_name='adb-ready',
+          operation=AndroidToolsOperation.ADB_DEVICES,
+          backend=AndroidToolsBackend.ADB,
+          exit_code=0,
+          stdout_lines=(
+            'List of devices attached',
+            'R58N12345AB\tdevice usb:1-1 product:dm3q model:SM_G991U device:dm3q',
+          ),
+        ),
+      )
+    )
+    live_detection = apply_live_device_info_trace(
+      live_detection,
+      normalize_android_tools_result(
+        build_adb_device_info_command_plan(device_serial='R58N12345AB'),
+        AndroidToolsProcessResult(
+          fixture_name='adb-info-ready',
+          operation=AndroidToolsOperation.ADB_GETPROP,
+          backend=AndroidToolsBackend.ADB,
+          exit_code=0,
+          stdout_lines=(
+            '[ro.product.manufacturer]: [samsung]',
+            '[ro.product.brand]: [samsung]',
+            '[ro.build.version.release]: [14]',
+            '[ro.build.version.security_patch]: [2026-04-05]',
+            '[ro.bootloader]: [G991USQS9HYD1]',
+          ),
+        ),
+      ),
+    )
+    session = replace(
+      session,
+      live_detection=live_detection,
+      inspection=build_inspection_workflow(
+        live_detection,
+        pit_inspection=pit_inspection,
+        captured_at_utc='2026-04-20T22:30:00Z',
+      ),
+    )
+
+    model = build_shell_view_model(
+      session,
+      scenario_name='Inspect-only ready lane',
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+    )
+
+    self.assertEqual(model.control_actions[2].label, 'Inspect device')
+    self.assertTrue(model.control_actions[2].enabled)
+    self.assertEqual(model.session_report.inspection.posture, 'ready')
+    self.assertIn('Inspect-only workflow captured', model.panels[4].summary)
+    self.assertTrue(
+      any('Inspection posture: ready' in line for line in model.panels[4].detail_lines)
+    )
+    self.assertTrue(
+      any('Inspection next action:' in line for line in model.panels[4].detail_lines)
+    )
 
   def test_ready_destructive_session_enables_separated_execute_action(self) -> None:
     session = replay_events(happy_path_events()[:-2])
@@ -156,10 +304,16 @@ class ShellViewModelTests(unittest.TestCase):
       session=session,
       package_fixture_name='matched',
     )
+    pit_inspection = build_demo_pit_inspection(
+      'happy',
+      session=session,
+      package_assessment=package_assessment,
+    )
     model = build_shell_view_model(
       session,
       scenario_name='Ready destructive lane',
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
     )
 
     execute_action = model.control_actions[3]
@@ -177,7 +331,13 @@ class ShellViewModelTests(unittest.TestCase):
       any('Recovery plan:' in line for line in model.panels[2].detail_lines)
     )
     self.assertTrue(
+      any('Observed PIT fingerprint:' in line for line in model.panels[2].detail_lines)
+    )
+    self.assertTrue(
       any('Report id:' in line for line in model.panels[4].detail_lines)
+    )
+    self.assertTrue(
+      any('PIT posture:' in line for line in model.panels[4].detail_lines)
     )
     self.assertTrue(
       any('Flash plan posture:' in line for line in model.panels[4].detail_lines)
@@ -285,6 +445,33 @@ class ShellViewModelTests(unittest.TestCase):
     )
     self.assertTrue(
       any('Recovery guidance:' in line for line in model.panels[4].detail_lines)
+    )
+
+  def test_pit_mismatch_surfaces_in_package_and_evidence_panels(self) -> None:
+    session = build_demo_session('blocked')
+    package_assessment = build_demo_package_assessment('blocked', session=session)
+    pit_inspection = build_demo_pit_inspection(
+      'blocked',
+      session=session,
+      package_assessment=package_assessment,
+    )
+
+    model = build_shell_view_model(
+      session,
+      scenario_name='Blocked PIT review lane',
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+    )
+
+    self.assertEqual(model.panels[2].tone, 'danger')
+    self.assertTrue(
+      any('PIT/package alignment: mismatched' in line for line in model.panels[2].detail_lines)
+    )
+    self.assertTrue(
+      any('Observed PIT fingerprint:' in line for line in model.panels[2].detail_lines)
+    )
+    self.assertTrue(
+      any('PIT posture:' in line for line in model.panels[4].detail_lines)
     )
 
   def test_adapter_backed_failure_surfaces_transport_trace(self) -> None:

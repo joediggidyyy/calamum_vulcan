@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
 from typing import Dict
 from typing import Optional
 from typing import Tuple
@@ -12,10 +13,18 @@ from calamum_vulcan.domain.device_registry import DeviceRegistryMatchKind
 from calamum_vulcan.domain.device_registry import resolve_device_profile
 from calamum_vulcan.domain.flash_plan import ReviewedFlashPlan
 from calamum_vulcan.domain.flash_plan import build_reviewed_flash_plan
+from calamum_vulcan.domain.live_device import LiveDetectionSession
+from calamum_vulcan.domain.live_device import LiveDeviceInfoState
+from calamum_vulcan.domain.live_device import LiveDetectionState
+from calamum_vulcan.domain.live_device import LiveDeviceSnapshot
+from calamum_vulcan.domain.live_device import LiveDeviceSource
+from calamum_vulcan.domain.live_device import LiveDeviceSupportPosture
 from calamum_vulcan.domain.package import PackageCompatibilityExpectation
 from calamum_vulcan.domain.package import PackageManifestAssessment
 from calamum_vulcan.domain.package import PackageRiskLevel
 from calamum_vulcan.domain.package import preflight_overrides_from_package_assessment
+from calamum_vulcan.domain.pit import PitInspection
+from calamum_vulcan.domain.pit import PitInspectionState
 from calamum_vulcan.domain.preflight import PreflightGate
 from calamum_vulcan.domain.preflight import PreflightInput
 from calamum_vulcan.domain.preflight import PreflightReport
@@ -37,6 +46,16 @@ PANEL_TITLES = (
 )
 
 UNPOPULATED_VALUE = '--'
+
+LIVE_PHASE_LABELS = {
+  LiveDeviceSource.ADB: 'ADB Device Detected',
+  LiveDeviceSource.FASTBOOT: 'Fastboot Device Detected',
+}  # type: Dict[LiveDeviceSource, str]
+
+LIVE_PHASE_ATTENTION_LABELS = {
+  LiveDeviceSource.ADB: 'ADB Device Attention',
+  LiveDeviceSource.FASTBOOT: 'Fastboot Device Attention',
+}  # type: Dict[LiveDeviceSource, str]
 
 PHASE_LABELS = {
   SessionPhase.NO_DEVICE: 'No Device',
@@ -147,9 +166,12 @@ class ShellViewModel:
   panels: Tuple[PanelViewModel, ...]
   control_actions: Tuple[ControlActionViewModel, ...]
   log_lines: Tuple[str, ...]
+  session_report: SessionEvidenceReport
   session: PlatformSession
   package_assessment: Optional[PackageManifestAssessment]
+  pit_inspection: Optional[PitInspection]
   transport_trace: Optional[HeimdallNormalizedTrace]
+  live_detection: LiveDetectionSession
   live_device: Optional[LiveCompanionDeviceViewModel] = None
   boot_unhydrated: bool = False
   device_surface_cleared: bool = False
@@ -160,16 +182,30 @@ def build_shell_view_model(
   scenario_name: str = 'Live session',
   preflight_report: Optional[PreflightReport] = None,
   package_assessment: Optional[PackageManifestAssessment] = None,
+  pit_inspection: Optional[PitInspection] = None,
   transport_trace: Optional[HeimdallNormalizedTrace] = None,
   session_report: Optional[SessionEvidenceReport] = None,
+  live_detection: Optional[LiveDetectionSession] = None,
   live_device: Optional[LiveCompanionDeviceViewModel] = None,
   boot_unhydrated: bool = False,
   device_surface_cleared: bool = False,
 ) -> ShellViewModel:
   """Build the FS-03 shell model directly from the immutable session."""
 
-  phase_label = PHASE_LABELS[session.phase]
-  phase_tone = PHASE_TONES[session.phase]
+  resolved_live_detection = _resolve_live_detection(
+    session,
+    live_detection,
+    live_device,
+  )
+  resolved_device_surface_cleared = (
+    device_surface_cleared
+    or (
+      resolved_live_detection.state == LiveDetectionState.CLEARED
+      and resolved_live_detection.snapshot is None
+    )
+  )
+  session = _session_with_live_detection(session, resolved_live_detection)
+  phase_label, phase_tone = _display_phase(session, resolved_live_detection)
   report = preflight_report
   if report is None:
     report = _build_preflight_report(session, package_assessment)
@@ -180,8 +216,10 @@ def build_shell_view_model(
       scenario_name=scenario_name,
       preflight_report=report,
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
       transport_trace=transport_trace,
     )
+  compatibility_live_device = _compat_live_device_overlay(resolved_live_detection)
   return ShellViewModel(
     title='Calamum Vulcan',
     subtitle='Samsung operations console — reviewed-session GUI shell',
@@ -194,27 +232,31 @@ def build_shell_view_model(
       session,
       report,
       package_assessment,
-      live_device,
+      resolved_live_detection,
       boot_unhydrated,
-      device_surface_cleared,
+      resolved_device_surface_cleared,
     ),
     panels=_build_panels(
       session,
       report,
       package_assessment,
+      pit_inspection,
       evidence_report,
-      live_device,
+      resolved_live_detection,
       boot_unhydrated,
-      device_surface_cleared,
+      resolved_device_surface_cleared,
     ),
     control_actions=_build_control_actions(session, report, evidence_report),
     log_lines=evidence_report.log_lines,
+    session_report=evidence_report,
     session=session,
     package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
     transport_trace=transport_trace,
-    live_device=live_device,
+    live_detection=resolved_live_detection,
+    live_device=compatibility_live_device,
     boot_unhydrated=boot_unhydrated,
-    device_surface_cleared=device_surface_cleared,
+    device_surface_cleared=resolved_device_surface_cleared,
   )
 
 
@@ -239,14 +281,114 @@ def describe_shell(model: ShellViewModel) -> str:
   )
 
 
+def _resolve_live_detection(
+  session: PlatformSession,
+  live_detection: Optional[LiveDetectionSession],
+  live_device: Optional[LiveCompanionDeviceViewModel],
+) -> LiveDetectionSession:
+  if live_detection is not None:
+    return live_detection
+  if live_device is not None:
+    return _legacy_live_device_to_detection(live_device)
+  return session.live_detection
+
+
+def _session_with_live_detection(
+  session: PlatformSession,
+  live_detection: LiveDetectionSession,
+) -> PlatformSession:
+  if session.live_detection == live_detection:
+    return session
+  return replace(session, live_detection=live_detection)
+
+
+def _compat_live_device_overlay(
+  live_detection: LiveDetectionSession,
+) -> Optional[LiveCompanionDeviceViewModel]:
+  snapshot = live_detection.snapshot
+  if snapshot is None:
+    return None
+  return LiveCompanionDeviceViewModel(
+    backend=snapshot.source.value,
+    serial=snapshot.serial,
+    state=snapshot.connection_state,
+    transport=snapshot.transport,
+    product_code=snapshot.product_code,
+    model_name=snapshot.model_name,
+    device_name=snapshot.device_name,
+  )
+
+
+def _legacy_live_device_to_detection(
+  live_device: LiveCompanionDeviceViewModel,
+) -> LiveDetectionSession:
+  source = LiveDeviceSource(live_device.backend)
+  product_code = live_device.product_code or live_device.model_name
+  device_resolution = resolve_device_profile(product_code)
+  support_posture = LiveDeviceSupportPosture.IDENTITY_INCOMPLETE
+  registry_match_kind = 'unknown'
+  canonical_product_code = None
+  marketing_name = None
+  if product_code is not None:
+    registry_match_kind = device_resolution.match_kind.value
+    canonical_product_code = device_resolution.canonical_product_code
+    marketing_name = device_resolution.marketing_name
+    if device_resolution.known:
+      support_posture = LiveDeviceSupportPosture.SUPPORTED
+    else:
+      support_posture = LiveDeviceSupportPosture.UNPROFILED
+
+  snapshot = LiveDeviceSnapshot(
+    source=source,
+    serial=live_device.serial,
+    connection_state=live_device.state,
+    transport=live_device.transport,
+    mode='{source}/{state}'.format(
+      source=source.value,
+      state=live_device.state,
+    ),
+    command_ready=(
+      live_device.state == 'device'
+      if source == LiveDeviceSource.ADB
+      else live_device.state == 'fastboot'
+    ),
+    product_code=product_code,
+    model_name=live_device.model_name,
+    device_name=live_device.device_name,
+    canonical_product_code=canonical_product_code,
+    marketing_name=marketing_name,
+    registry_match_kind=registry_match_kind,
+    support_posture=support_posture,
+    info_state=(
+      LiveDeviceInfoState.NOT_COLLECTED
+      if source == LiveDeviceSource.ADB and live_device.state == 'device'
+      else LiveDeviceInfoState.UNAVAILABLE
+    ),
+  )
+  detection_state = LiveDetectionState.DETECTED
+  if not snapshot.command_ready:
+    detection_state = LiveDetectionState.ATTENTION
+  return LiveDetectionSession(
+    state=detection_state,
+    summary='{backend} reported a live device through the compatibility overlay.'.format(
+      backend=source.value.upper(),
+    ),
+    source=source,
+    source_labels=(source.value,),
+    snapshot=snapshot,
+  )
+
+
 def _build_status_pills(
   session: PlatformSession,
   report: PreflightReport,
   package_assessment: Optional[PackageManifestAssessment],
-  live_device: Optional[LiveCompanionDeviceViewModel],
+  live_detection: LiveDetectionSession,
   boot_unhydrated: bool,
   device_surface_cleared: bool,
 ) -> Tuple[StatusPillViewModel, ...]:
+  live_snapshot = live_detection.snapshot
+  phase_label, phase_tone = _display_phase(session, live_detection)
   if boot_unhydrated:
     risk_value = UNPOPULATED_VALUE
     risk_tone = 'neutral'
@@ -264,16 +406,20 @@ def _build_status_pills(
     elif risk_value == 'advanced':
       risk_tone = 'warning'
 
-    if device_surface_cleared and live_device is None:
-      device_value = UNPOPULATED_VALUE
+    device_value = _device_pill_value(
+      session,
+      live_detection,
+      device_surface_cleared,
+    )
+    device_tone = 'info' if session.guards.has_device or live_snapshot is not None else 'neutral'
+    if device_surface_cleared and live_snapshot is None:
       device_tone = 'neutral'
-    else:
-      device_value = _device_pill_value(session, live_device)
-      device_tone = 'info' if session.guards.has_device or live_device is not None else 'neutral'
-      if live_device is not None and live_device.state == 'device':
-        device_tone = 'success'
-      elif live_device is not None and live_device.state != 'device':
-        device_tone = 'warning'
+    elif live_snapshot is not None and live_snapshot.command_ready:
+      device_tone = 'success'
+    elif live_snapshot is not None and not live_snapshot.command_ready:
+      device_tone = 'warning'
+    elif live_detection.state == LiveDetectionState.FAILED:
+      device_tone = 'danger'
 
     package_value = _package_label_value(session, package_assessment)
     package_tone = 'info' if session.guards.package_loaded else 'neutral'
@@ -281,8 +427,8 @@ def _build_status_pills(
   return (
     StatusPillViewModel(
       label='Phase',
-      value=PHASE_LABELS[session.phase],
-      tone=PHASE_TONES[session.phase],
+      value=phase_label,
+      tone=phase_tone,
     ),
     StatusPillViewModel(
       label='Gate',
@@ -311,34 +457,69 @@ def _build_panels(
   session: PlatformSession,
   report: PreflightReport,
   package_assessment: Optional[PackageManifestAssessment],
+  pit_inspection: Optional[PitInspection],
   session_report: SessionEvidenceReport,
-  live_device: Optional[LiveCompanionDeviceViewModel],
+  live_detection: LiveDetectionSession,
   boot_unhydrated: bool,
   device_surface_cleared: bool,
 ) -> Tuple[PanelViewModel, ...]:
   return (
     _build_device_panel(
       session,
-      live_device,
+      live_detection,
       boot_unhydrated,
       device_surface_cleared,
     ),
     _build_preflight_panel(session, report, boot_unhydrated),
-    _build_package_panel(session, package_assessment, boot_unhydrated),
-    _build_transport_panel(session, session_report, boot_unhydrated),
+    _build_package_panel(
+      session,
+      package_assessment,
+      pit_inspection,
+      boot_unhydrated,
+    ),
+    _build_transport_panel(
+      session,
+      session_report,
+      live_detection,
+      boot_unhydrated,
+    ),
     _build_evidence_panel(session_report, boot_unhydrated),
   )
 
 
+def _display_phase(
+  session: PlatformSession,
+  live_detection: LiveDetectionSession,
+) -> Tuple[str, str]:
+  """Return the operator-facing phase label/tone for the current shell."""
+
+  snapshot = live_detection.snapshot
+  if session.phase == SessionPhase.NO_DEVICE and snapshot is not None:
+    if snapshot.command_ready:
+      return LIVE_PHASE_LABELS[snapshot.source], 'info'
+    return LIVE_PHASE_ATTENTION_LABELS[snapshot.source], 'warning'
+  return PHASE_LABELS[session.phase], PHASE_TONES[session.phase]
+
+
+def _reviewed_target_phase_label(session: PlatformSession) -> str:
+  """Return the explicit reviewed-target posture without live-phase overrides."""
+
+  if session.phase == SessionPhase.NO_DEVICE:
+    return 'No Download-Mode Target'
+  return PHASE_LABELS[session.phase]
+
+
 def _build_device_panel(
   session: PlatformSession,
-  live_device: Optional[LiveCompanionDeviceViewModel],
+  live_detection: LiveDetectionSession,
   boot_unhydrated: bool,
   device_surface_cleared: bool,
 ) -> PanelViewModel:
-  live_product_code = _live_product_code(live_device)
+  live_snapshot = live_detection.snapshot
+  live_product_code = _live_product_code(live_snapshot)
   device_resolution = resolve_device_profile(live_product_code or session.product_code)
-  if boot_unhydrated and live_device is None:
+
+  if boot_unhydrated and live_snapshot is None:
     return PanelViewModel(
       title='Device Identity',
       eyebrow='DEVICE',
@@ -358,15 +539,18 @@ def _build_device_panel(
       ),
       tone='neutral',
     )
-  if device_surface_cleared and live_device is None:
+
+  if device_surface_cleared and live_snapshot is None:
+    details = [
+      'Latest detect: {summary}'.format(summary=live_detection.summary),
+      'Next action: reconnect and run Detect device again.',
+    ]
+    details.extend(_live_fallback_lines(live_detection))
     return PanelViewModel(
       title='Device Identity',
       eyebrow='DEVICE',
       summary='No live device is currently detected.',
-      detail_lines=(
-        'Latest detect: no device found.',
-        'Next action: reconnect and run Detect device again.',
-      ),
+      detail_lines=tuple(details),
       metrics=(
         MetricViewModel('Presence', UNPOPULATED_VALUE, 'neutral'),
         MetricViewModel('Product code', UNPOPULATED_VALUE, 'neutral'),
@@ -375,53 +559,101 @@ def _build_device_panel(
       ),
       tone='neutral',
     )
-  if live_device is not None:
-    backend_label = live_device.backend.upper()
-    summary = 'Live companion detected {device} via {backend} while the reviewed session remains {phase}.'.format(
-      device=_live_device_summary_identity(live_device, device_resolution),
-      backend=backend_label,
-      phase=PHASE_LABELS[session.phase],
-    )
+
+  if live_detection.state == LiveDetectionState.FAILED and live_snapshot is None:
     details = [
-      'Live serial: {serial}'.format(serial=live_device.serial),
-      'Live companion backend: {backend}'.format(backend=backend_label),
-      'Live state: {state}'.format(state=live_device.state),
-      'Live transport: {transport}'.format(transport=live_device.transport),
-      'Reviewed session phase: {phase}'.format(phase=PHASE_LABELS[session.phase]),
+      'Latest detect: {summary}'.format(summary=live_detection.summary),
+      'Next action: verify adb/fastboot availability and rerun Detect device.',
     ]
+    details.extend(_live_fallback_lines(live_detection))
+    for note in live_detection.notes[:2]:
+      details.append('Live note: {note}'.format(note=note))
+    return PanelViewModel(
+      title='Device Identity',
+      eyebrow='DEVICE',
+      summary='Live detection could not establish a trustworthy device identity.',
+      detail_lines=tuple(details),
+      metrics=(
+        MetricViewModel('Presence', 'probe failed', 'danger'),
+        MetricViewModel('Product code', UNPOPULATED_VALUE, 'neutral'),
+        MetricViewModel('Registry', UNPOPULATED_VALUE, 'neutral'),
+        MetricViewModel('Mode', UNPOPULATED_VALUE, 'neutral'),
+      ),
+      tone='danger',
+    )
+
+  if live_snapshot is not None:
+    backend_label = live_snapshot.source.value.upper()
+    reviewed_target_phase = _reviewed_target_phase_label(session)
+    summary = 'Live companion detected {device} via {backend} while the reviewed target posture remains {phase}.'.format(
+      device=_live_device_summary_identity(live_snapshot, device_resolution),
+      backend=backend_label,
+      phase=reviewed_target_phase,
+    )
+    if not live_snapshot.command_ready:
+      summary = 'Live companion identified {device} via {backend}, but it still needs operator attention while the reviewed target posture remains {phase}.'.format(
+        device=_live_device_summary_identity(live_snapshot, device_resolution),
+        backend=backend_label,
+        phase=reviewed_target_phase,
+      )
+    elif live_snapshot.info_state == LiveDeviceInfoState.CAPTURED:
+      summary = 'Live companion detected {device} via {backend}, and bounded read-side device info is now captured while the reviewed target posture remains {phase}.'.format(
+        device=_live_device_summary_identity(live_snapshot, device_resolution),
+        backend=backend_label,
+        phase=reviewed_target_phase,
+      )
+    elif live_snapshot.info_state == LiveDeviceInfoState.PARTIAL:
+      summary = 'Live companion detected {device} via {backend}, and a partial read-side info snapshot is available while the reviewed target posture remains {phase}.'.format(
+        device=_live_device_summary_identity(live_snapshot, device_resolution),
+        backend=backend_label,
+        phase=reviewed_target_phase,
+      )
+    elif live_snapshot.info_state == LiveDeviceInfoState.FAILED:
+      summary = 'Live companion detected {device} via {backend}, but richer read-side device info could not be captured while the reviewed target posture remains {phase}.'.format(
+        device=_live_device_summary_identity(live_snapshot, device_resolution),
+        backend=backend_label,
+        phase=reviewed_target_phase,
+      )
+    details = [
+      'Live serial: {serial}'.format(serial=live_snapshot.serial),
+      'Live companion backend: {backend}'.format(backend=backend_label),
+      'Live state: {state}'.format(state=live_snapshot.connection_state),
+      'Live transport: {transport}'.format(transport=live_snapshot.transport),
+      'Live mode: {mode}'.format(mode=live_snapshot.mode),
+      'Reviewed target posture: {phase}'.format(phase=reviewed_target_phase),
+    ]
+    details.extend(_live_fallback_lines(live_detection))
     if live_product_code is not None:
       details.append(
         'Live product code: {product_code}'.format(product_code=live_product_code)
       )
-    if live_device.model_name is not None and live_device.model_name != live_product_code:
-      details.append('Live model: {model}'.format(model=live_device.model_name))
-    if live_device.device_name is not None:
+    if live_snapshot.model_name is not None and live_snapshot.model_name != live_product_code:
+      details.append('Live model: {model}'.format(model=live_snapshot.model_name))
+    if live_snapshot.device_name is not None:
       details.append(
-        'Live device codename: {device}'.format(device=live_device.device_name)
+        'Live device codename: {device}'.format(device=live_snapshot.device_name)
       )
     if session.mode is not None:
-      details.append(
-        'Reviewed session mode: {mode}'.format(mode=session.mode)
-      )
+      details.append('Reviewed session mode: {mode}'.format(mode=session.mode))
 
-    if device_resolution.known:
+    if live_snapshot.support_posture == LiveDeviceSupportPosture.SUPPORTED:
       details.append(
         'Marketing name: {name}'.format(
-          name=device_resolution.marketing_name or 'Samsung device',
+          name=live_snapshot.marketing_name or 'Samsung device',
         )
       )
       details.append(
         'Canonical product code: {product_code}'.format(
           product_code=(
-            device_resolution.canonical_product_code
-            or device_resolution.detected_product_code
+            live_snapshot.canonical_product_code
+            or live_product_code
             or 'unknown'
           ),
         )
       )
       details.append(
         'Registry match: {match}'.format(
-          match=device_resolution.match_kind.value,
+          match=live_snapshot.registry_match_kind,
         )
       )
       if device_resolution.mode_entry_instructions:
@@ -432,33 +664,41 @@ def _build_device_panel(
         )
       for quirk in device_resolution.known_quirks[:1]:
         details.append('Device quirk: {quirk}'.format(quirk=quirk))
-      registry_value = device_resolution.match_kind.value
+      registry_value = live_snapshot.registry_match_kind
       registry_tone = 'success'
-      if device_resolution.match_kind == DeviceRegistryMatchKind.ALIAS:
+      if live_snapshot.registry_match_kind == DeviceRegistryMatchKind.ALIAS.value:
         registry_tone = 'info'
-    else:
+    elif live_snapshot.support_posture == LiveDeviceSupportPosture.UNPROFILED:
       details.extend(
         (
-          'Registry match: unknown',
+          'Support posture: unprofiled',
           'Add a repo-owned device profile before trusting compatibility resolution.',
         )
       )
-      registry_value = 'unknown'
+      registry_value = 'unprofiled'
+      registry_tone = 'warning'
+    else:
+      details.extend(
+        (
+          'Support posture: identity incomplete',
+          'The active live source did not provide enough identity to resolve a repo-owned device profile.',
+        )
+      )
+      registry_value = 'incomplete'
       registry_tone = 'warning'
 
-    tone = 'success' if live_device.state == 'device' else 'warning'
+    details.extend(_live_info_detail_lines(live_snapshot))
+
+    for note in live_detection.notes[:2]:
+      if note not in details:
+        details.append('Live note: {note}'.format(note=note))
+
+    tone = 'success' if live_snapshot.command_ready else 'warning'
     metrics = (
       MetricViewModel('Presence', 'live', tone),
       MetricViewModel('Product code', live_product_code or 'unknown', 'info'),
       MetricViewModel('Registry', registry_value, registry_tone),
-      MetricViewModel(
-        'Mode',
-        '{backend}/{state}'.format(
-          backend=live_device.backend,
-          state=live_device.state,
-        ),
-        tone,
-      ),
+      MetricViewModel('Mode', live_snapshot.mode, tone),
     )
     return PanelViewModel(
       title='Device Identity',
@@ -561,36 +801,42 @@ def _build_device_panel(
 
 def _device_pill_value(
   session: PlatformSession,
-  live_device: Optional[LiveCompanionDeviceViewModel],
+  live_detection: LiveDetectionSession,
+  device_surface_cleared: bool,
 ) -> str:
-  if live_device is None:
+  live_snapshot = live_detection.snapshot
+  if device_surface_cleared and live_snapshot is None:
+    return UNPOPULATED_VALUE
+  if live_snapshot is None:
+    if live_detection.state == LiveDetectionState.FAILED:
+      return 'probe failed'
     return session.product_code or 'awaiting device'
-  product_code = _live_product_code(live_device)
+  product_code = _live_product_code(live_snapshot)
   if product_code is not None:
     return '{product_code} via {backend}'.format(
       product_code=product_code,
-      backend=live_device.backend.upper(),
+      backend=live_snapshot.source.value.upper(),
     )
   return '{serial} via {backend}'.format(
-    serial=live_device.serial,
-    backend=live_device.backend.upper(),
+    serial=live_snapshot.serial,
+    backend=live_snapshot.source.value.upper(),
   )
 
 
 def _live_product_code(
-  live_device: Optional[LiveCompanionDeviceViewModel],
+  live_snapshot: Optional[LiveDeviceSnapshot],
 ) -> Optional[str]:
-  if live_device is None:
+  if live_snapshot is None:
     return None
-  if live_device.product_code is not None:
-    return live_device.product_code
-  if live_device.model_name is not None:
-    return live_device.model_name
+  if live_snapshot.product_code is not None:
+    return live_snapshot.product_code
+  if live_snapshot.model_name is not None:
+    return live_snapshot.model_name
   return None
 
 
 def _live_device_summary_identity(
-  live_device: LiveCompanionDeviceViewModel,
+  live_snapshot: LiveDeviceSnapshot,
   device_resolution,
 ) -> str:
   if device_resolution.known:
@@ -599,16 +845,87 @@ def _live_device_summary_identity(
       product_code=(
         device_resolution.canonical_product_code
         or device_resolution.detected_product_code
-        or live_device.serial
+        or live_snapshot.serial
       ),
     )
-  live_product_code = _live_product_code(live_device)
+  live_product_code = _live_product_code(live_snapshot)
   if live_product_code is not None:
     return '{product_code} [{serial}]'.format(
       product_code=live_product_code,
-      serial=live_device.serial,
+      serial=live_snapshot.serial,
     )
-  return live_device.serial
+  return live_snapshot.serial
+
+
+def _live_fallback_lines(
+  live_detection: LiveDetectionSession,
+) -> Tuple[str, ...]:
+  lines = []
+  if live_detection.fallback_posture.value != 'not_needed':
+    lines.append(
+      'Fallback posture: {posture}'.format(
+        posture=live_detection.fallback_posture.value.replace('_', ' '),
+      )
+    )
+  if live_detection.source_labels:
+    lines.append(
+      'Sources considered: {sources}'.format(
+        sources=' -> '.join(label.upper() for label in live_detection.source_labels),
+      )
+    )
+  if live_detection.fallback_reason:
+    lines.append(
+      'Fallback reason: {reason}'.format(reason=live_detection.fallback_reason)
+    )
+  return tuple(lines)
+
+
+def _live_info_detail_lines(
+  live_snapshot: LiveDeviceSnapshot,
+) -> Tuple[str, ...]:
+  lines = [
+    'Info posture: {posture}'.format(
+      posture=live_snapshot.info_state.value.replace('_', ' '),
+    )
+  ]
+  if live_snapshot.manufacturer is not None:
+    lines.append('Manufacturer: {manufacturer}'.format(
+      manufacturer=live_snapshot.manufacturer,
+    ))
+  if live_snapshot.brand is not None:
+    lines.append('Brand: {brand}'.format(brand=live_snapshot.brand))
+  if live_snapshot.android_version is not None:
+    lines.append('Android version: {version}'.format(
+      version=live_snapshot.android_version,
+    ))
+  if live_snapshot.security_patch is not None:
+    lines.append('Security patch: {patch}'.format(
+      patch=live_snapshot.security_patch,
+    ))
+  if live_snapshot.bootloader_version is not None:
+    lines.append('Bootloader: {bootloader}'.format(
+      bootloader=live_snapshot.bootloader_version,
+    ))
+  if live_snapshot.build_id is not None:
+    lines.append('Build id: {build_id}'.format(build_id=live_snapshot.build_id))
+  capability_hints = list(live_snapshot.capability_hints[:3])
+  info_hint = next(
+    (
+      hint
+      for hint in live_snapshot.capability_hints
+      if hint.startswith('bounded_info_snapshot_')
+    ),
+    None,
+  )
+  if info_hint is not None and info_hint not in capability_hints:
+    capability_hints.append(info_hint)
+  for capability in capability_hints:
+    lines.append('Capability hint: {hint}'.format(
+      hint=capability.replace('_', ' '),
+    ))
+  for guidance in live_snapshot.operator_guidance[:2]:
+    lines.append('Next step: {guidance}'.format(guidance=guidance))
+  return tuple(lines)
 
 
 def _build_preflight_panel(
@@ -671,6 +988,7 @@ def _build_preflight_panel(
 def _build_package_panel(
   session: PlatformSession,
   package_assessment: Optional[PackageManifestAssessment],
+  pit_inspection: Optional[PitInspection],
   boot_unhydrated: bool,
 ) -> PanelViewModel:
   if boot_unhydrated and package_assessment is None:
@@ -779,6 +1097,19 @@ def _build_package_panel(
       summary = '{name} does not match the detected Samsung product code.'.format(
         name=package_assessment.display_name,
       )
+  elif pit_inspection is not None and pit_inspection.package_alignment.value == 'mismatched':
+    summary = '{name} does not match the observed device PIT fingerprint.'.format(
+      name=package_assessment.display_name,
+    )
+    tone = 'danger'
+  elif pit_inspection is not None and pit_inspection.state in (
+    PitInspectionState.MALFORMED,
+    PitInspectionState.FAILED,
+  ):
+    summary = '{name} still needs trustworthy PIT inspection truth before deeper review should continue.'.format(
+      name=package_assessment.display_name,
+    )
+    tone = 'warning'
   elif not reviewed_flash_plan.ready_for_transport:
     summary = reviewed_flash_plan.summary
   elif package_assessment.suspicious_warning_count:
@@ -815,7 +1146,11 @@ def _build_package_panel(
     title='Package Summary',
     eyebrow='PACKAGE',
     summary=summary,
-    detail_lines=_package_detail_lines(package_assessment, reviewed_flash_plan),
+    detail_lines=_package_detail_lines(
+      package_assessment,
+      reviewed_flash_plan,
+      pit_inspection,
+    ),
     metrics=metrics,
     tone=tone,
   )
@@ -824,8 +1159,10 @@ def _build_package_panel(
 def _build_transport_panel(
   session: PlatformSession,
   session_report: SessionEvidenceReport,
+  live_detection: LiveDetectionSession,
   boot_unhydrated: bool,
 ) -> PanelViewModel:
+  phase_label, phase_tone = _display_phase(session, live_detection)
   if boot_unhydrated:
     return PanelViewModel(
       title='Transport State',
@@ -836,7 +1173,7 @@ def _build_transport_panel(
         'Next action: hydrate device and package surfaces before transport review begins.',
       ),
       metrics=(
-        MetricViewModel('Phase', PHASE_LABELS[session.phase], PHASE_TONES[session.phase]),
+        MetricViewModel('Phase', phase_label, phase_tone),
         MetricViewModel('Transport', 'standby', 'neutral'),
         MetricViewModel('Exit code', UNPOPULATED_VALUE, 'neutral'),
         MetricViewModel('Mode', UNPOPULATED_VALUE, 'neutral'),
@@ -863,7 +1200,7 @@ def _build_transport_panel(
     details.append('Failure: {reason}'.format(reason=session.failure_reason))
 
   metrics = (
-    MetricViewModel('Phase', PHASE_LABELS[session.phase], PHASE_TONES[session.phase]),
+    MetricViewModel('Phase', phase_label, phase_tone),
     MetricViewModel(
       'Transport',
       transport.state.replace('_', ' '),
@@ -932,6 +1269,13 @@ def _build_evidence_panel(
       count=session_report.package.suspicious_warning_count,
       summary=session_report.package.suspiciousness_summary,
     ),
+    'PIT posture: {state} / {alignment}'.format(
+      state=session_report.pit.state,
+      alignment=session_report.pit.package_alignment,
+    ),
+    'Observed PIT fingerprint: {fingerprint}'.format(
+      fingerprint=session_report.pit.observed_pit_fingerprint or 'unknown',
+    ),
     'Recommended action: {action}'.format(
       action=session_report.preflight.recommended_action,
     ),
@@ -942,6 +1286,26 @@ def _build_evidence_panel(
       targets=', '.join(target.upper() for target in session_report.host.export_targets),
     ),
   ]
+  if session_report.inspection.posture != 'uninspected':
+    details.extend(
+      (
+        'Inspection posture: {posture}'.format(
+          posture=session_report.inspection.posture,
+        ),
+        'Inspection summary: {summary}'.format(
+          summary=session_report.inspection.summary,
+        ),
+        'Inspection next action: {action}'.format(
+          action=session_report.inspection.next_action,
+        ),
+      )
+    )
+    for boundary in session_report.inspection.action_boundaries[:1]:
+      details.append('Inspection boundary: {boundary}'.format(
+        boundary=boundary,
+      ))
+    for note in session_report.inspection.notes[:1]:
+      details.append('Inspection note: {note}'.format(note=note))
   if session_report.package.snapshot_id is not None:
     details.append(
       'Analyzed snapshot: {snapshot_id}'.format(
@@ -959,6 +1323,20 @@ def _build_evidence_panel(
     details.append('Advanced requirement: {requirement}'.format(
       requirement=requirement,
     ))
+  if session_report.pit.partition_names:
+    details.append(
+      'Observed PIT partitions: {partitions}'.format(
+        partitions=', '.join(session_report.pit.partition_names),
+      )
+    )
+  if session_report.pit.download_path:
+    details.append(
+      'Downloaded PIT artifact: {path}'.format(
+        path=session_report.pit.download_path,
+      )
+    )
+  for guidance in session_report.pit.operator_guidance[:1]:
+    details.append('PIT guidance: {guidance}'.format(guidance=guidance))
   for warning in session_report.flash_plan.operator_warnings[:1]:
     details.append('Flash plan warning: {warning}'.format(warning=warning))
   for blocker in session_report.flash_plan.blocking_reasons[:1]:
@@ -1022,10 +1400,10 @@ def _build_control_actions(
       emphasis='normal',
     ),
     ControlActionViewModel(
-      label='Review preflight',
-      hint='Open the trust gate before any flash activity is possible.',
-      enabled=session.guards.has_device and session.guards.package_loaded,
-      emphasis='primary' if session.guards.has_device else 'normal',
+      label='Inspect device',
+      hint='Run the first-class inspect-only lane: detect/info/PIT evidence without opening a write path.',
+      enabled=True,
+      emphasis='primary',
     ),
     ControlActionViewModel(
       label='Execute flash plan',
@@ -1110,6 +1488,12 @@ def _risk_tone(risk_level: Optional[PackageRiskLevel]) -> str:
 
 
 def _evidence_tone(session_report: SessionEvidenceReport) -> str:
+  if session_report.pit.state in ('failed', 'malformed'):
+    return 'danger'
+  if session_report.pit.package_alignment == 'mismatched':
+    return 'danger'
+  if session_report.pit.state == 'partial':
+    return 'warning'
   if session_report.outcome.outcome == 'failed':
     return 'danger'
   if session_report.outcome.outcome == 'resume_needed':
@@ -1138,6 +1522,7 @@ def _transport_tone(state: str) -> str:
 def _package_detail_lines(
   package_assessment: PackageManifestAssessment,
   reviewed_flash_plan: ReviewedFlashPlan,
+  pit_inspection: Optional[PitInspection],
 ) -> Tuple[str, ...]:
   details = [
     'Package id: {package_id}'.format(
@@ -1211,6 +1596,52 @@ def _package_detail_lines(
     )
   for quirk in package_assessment.device_known_quirks[:1]:
     details.append('Device quirk: {quirk}'.format(quirk=quirk))
+
+  if pit_inspection is not None:
+    details.append(
+      'Observed PIT posture: {state}'.format(
+        state=pit_inspection.state.value.replace('_', ' '),
+      )
+    )
+    details.append(
+      'Observed PIT fingerprint: {fingerprint}'.format(
+        fingerprint=pit_inspection.observed_pit_fingerprint or 'unknown',
+      )
+    )
+    details.append(
+      'PIT/package alignment: {alignment}'.format(
+        alignment=pit_inspection.package_alignment.value.replace('_', ' '),
+      )
+    )
+    if pit_inspection.partition_names:
+      details.append(
+        'Observed partitions: {partitions}'.format(
+          partitions=', '.join(pit_inspection.partition_names),
+        )
+      )
+    if pit_inspection.marketing_name is not None:
+      details.append(
+        'Observed PIT device: {name} ({product})'.format(
+          name=pit_inspection.marketing_name,
+          product=(
+            pit_inspection.canonical_product_code
+            or pit_inspection.observed_product_code
+            or 'unknown'
+          ),
+        )
+      )
+    elif pit_inspection.observed_product_code is not None:
+      details.append(
+        'Observed PIT product code: {product}'.format(
+          product=pit_inspection.observed_product_code,
+        )
+      )
+    if pit_inspection.download_path:
+      details.append(
+        'PIT artifact path: {path}'.format(path=pit_inspection.download_path)
+      )
+    for guidance in pit_inspection.operator_guidance[:2]:
+      details.append('PIT guidance: {guidance}'.format(guidance=guidance))
 
   if package_assessment.partitions:
     for partition in package_assessment.partitions[:3]:

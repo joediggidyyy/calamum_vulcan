@@ -86,12 +86,12 @@ The packaging contract for `0.2.0` defines these installed entry points:
 
 ## Repository layout
 
-| Path                                        | Purpose                                                  |
-| ------------------------------------------- | -------------------------------------------------------- |
-| `calamum_vulcan/`                           | package source, launcher, fixtures, and runtime surfaces |
-| `tests/`                                    | unit and release-lane validation surfaces                |
+| Path                                                          | Purpose                                                  |
+| ------------------------------------------------------------- | -------------------------------------------------------- |
+| `calamum_vulcan/`                                             | package source, launcher, fixtures, and runtime surfaces |
+| `tests/`                                                      | unit and release-lane validation surfaces                |
 | `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md` | tracked public documentation surfaces                    |
-| `LICENSE`                                   | project license                                          |
+| `LICENSE`                                                     | project license                                          |
 
 ## Tracked documentation
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from datetime import datetime
 from datetime import timezone
 import io
@@ -20,15 +21,21 @@ from typing import Sequence
 
 from ..adapters.adb_fastboot import AndroidToolsCommandPlan
 from ..adapters.adb_fastboot import AndroidToolsNormalizedTrace
+from ..adapters.adb_fastboot import AndroidToolsOperation
 from ..adapters.adb_fastboot import available_adb_reboot_targets
 from ..adapters.adb_fastboot import available_fastboot_reboot_targets
 from ..adapters.adb_fastboot import build_adb_detect_command_plan
+from ..adapters.adb_fastboot import build_adb_device_info_command_plan
 from ..adapters.adb_fastboot import build_adb_reboot_command_plan
 from ..adapters.adb_fastboot import build_fastboot_detect_command_plan
 from ..adapters.adb_fastboot import build_fastboot_reboot_command_plan
 from ..adapters.adb_fastboot import execute_android_tools_command
+from ..adapters.heimdall import build_download_pit_command_plan
+from ..adapters.heimdall import build_print_pit_command_plan
+from ..adapters.heimdall import execute_heimdall_command
 from .demo import available_scenarios
 from .demo import available_adapter_fixtures
+from .demo import build_demo_pit_inspection
 from .demo import available_transport_sources
 from .demo import build_demo_adapter_session
 from .demo import build_demo_package_assessment
@@ -40,13 +47,20 @@ from .integration import build_sprint_close_bundle
 from .integration import render_sprint_close_bundle_markdown
 from .integration import serialize_sprint_close_bundle_json
 from .integration import write_sprint_close_bundle
+from ..domain.live_device import LiveFallbackPosture
+from ..domain.live_device import LiveDeviceSource
+from ..domain.live_device import apply_live_device_info_trace
+from ..domain.live_device import build_live_detection_session
 from ..domain.package import PackageArchiveImportError
 from ..domain.package import assess_package_archive
+from ..domain.pit import PitInspectionState
+from ..domain.pit import build_pit_inspection
 from ..domain.reporting import REPORT_EXPORT_TARGETS
 from ..domain.reporting import build_session_evidence_report
 from ..domain.reporting import render_session_evidence_markdown
 from ..domain.reporting import serialize_session_evidence_json
 from ..domain.reporting import write_session_evidence_report
+from ..domain.state import build_inspection_workflow
 from ..fixtures import available_package_manifest_fixtures
 from .qt_compat import QT_AVAILABLE
 from .qt_compat import QtWidgets
@@ -309,6 +323,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     help='Issue a live fastboot reboot command to the selected target mode.',
   )
   parser.add_argument(
+    '--inspect-device',
+    action='store_true',
+    help='Run the inspect-only workflow: live detect/info plus PIT review with exportable read-side evidence.',
+  )
+  parser.add_argument(
     '--device-serial',
     default=None,
     help='Optional serial selector for live adb/fastboot control commands.',
@@ -317,7 +336,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     '--control-format',
     choices=('text', 'json'),
     default='text',
-    help='Choose how live adb/fastboot command plans and results should be rendered.',
+    help='Choose how live companion and inspect-only command results should be rendered.',
+  )
+  parser.add_argument(
+    '--pit-output-path',
+    default='artifacts/device.pit',
+    help='Fallback output path when inspect-only PIT review uses metadata-only download-pit capture.',
   )
   parser.add_argument(
     '--describe-only',
@@ -403,7 +427,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.describe_only:
       return 0
     trace = execute_android_tools_command(control_plan)
-    print(_render_control_trace(trace, args.control_format))
+    live_detection = _enrich_live_detection_for_control_trace(trace)
+    print(_render_control_trace(trace, args.control_format, live_detection=live_detection))
+    return 0
+
+  if args.inspect_device:
+    _validate_inspection_inputs(args)
+    inspection_report = _run_inspect_only_workflow(
+      args,
+      scenario_label(args.scenario),
+    )
+    print(_render_inspection_result(inspection_report, args.control_format))
+    if args.evidence_output:
+      output_path = write_session_evidence_report(
+        inspection_report,
+        Path(args.evidence_output),
+        format_name=args.evidence_format,
+      )
+      print(
+        'evidence_written="{path}" format="{format_name}"'.format(
+          path=output_path,
+          format_name=args.evidence_format,
+        )
+      )
+    elif args.export_evidence:
+      if args.evidence_format == 'json':
+        print(serialize_session_evidence_json(inspection_report))
+      else:
+        print(render_session_evidence_markdown(inspection_report))
     return 0
 
   bundle = None
@@ -456,10 +507,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         session=session,
         package_fixture_name=args.package_fixture,
       )
+  pit_inspection = build_demo_pit_inspection(
+    args.scenario,
+    session=session,
+    package_assessment=package_assessment,
+  )
   session_report = build_session_evidence_report(
     session,
     scenario_name=scenario,
     package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
     transport_trace=transport_trace,
     captured_at_utc=args.captured_at_utc,
   )
@@ -467,6 +524,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     session,
     scenario_name=scenario,
     package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
     transport_trace=transport_trace,
     session_report=session_report,
     boot_unhydrated=args.boot_unhydrated,
@@ -481,7 +539,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         status='confirm' if QT_AVAILABLE else 'fail',
         decision='gui_launch_ready' if QT_AVAILABLE else 'qt_runtime_missing',
         sections=(),
-      )
+      ),
+      end='\n\n',
     )
 
   if args.export_evidence or args.evidence_output:
@@ -518,7 +577,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         status='confirm' if exit_code == 0 else 'fail',
         decision='gui_session_closed_cleanly' if exit_code == 0 else 'gui_session_closed_with_error',
         sections=(),
-      )
+      ),
+      end='\n\n',
     )
   return exit_code
 
@@ -533,6 +593,19 @@ def _validate_package_inputs(args: argparse.Namespace) -> None:
   if args.package_archive and args.transport_source == 'heimdall-adapter':
     raise SystemExit(
       'Real package archive intake is currently supported only with --transport-source state-fixture.'
+    )
+
+
+def _validate_inspection_inputs(args: argparse.Namespace) -> None:
+  """Validate inspect-only workflow boundaries before any live backend work begins."""
+
+  if args.integration_suite is not None:
+    raise SystemExit(
+      'Choose either --inspect-device or --integration-suite, not both.'
+    )
+  if args.transport_source == 'heimdall-adapter':
+    raise SystemExit(
+      'Inspect-only workflow currently requires --transport-source state-fixture because adapter-backed runtime traces imply write-side activity.'
     )
 
 
@@ -559,18 +632,46 @@ def _render_codesentinel_status_block(
 
   lines = [
     _colorize_gui_terminal_title(title),
-    'generated_at_utc: {timestamp}'.format(timestamp=_utc_now()),
-    'status: {status}'.format(status=status),
-    'decision: {decision}'.format(decision=decision),
+    '',
   ]
+  lines.extend(
+    _format_codesentinel_status_rows(
+      (
+        ('generated_at_utc', _utc_now()),
+        ('status', status),
+        ('decision', decision),
+      )
+    )
+  )
   if sections:
     lines.append('')
   for heading, rows in sections:
     lines.append(heading)
-    for key, value in rows:
-      lines.append('  {key}: {value}'.format(key=key, value=value))
+    lines.extend(_format_codesentinel_status_rows(rows, indent='  '))
     lines.append('')
   return '\n'.join(lines).rstrip()
+
+
+def _format_codesentinel_status_rows(
+  rows: Sequence[tuple[str, str]],
+  indent: str = '',
+) -> list[str]:
+  """Return aligned status rows for terminal-facing status blocks."""
+
+  if not rows:
+    return []
+  prefix_width = max(len(label) + 1 for label, _value in rows)
+  formatted_rows = []
+  for label, value in rows:
+    prefix = '{label}:'.format(label=label).ljust(prefix_width)
+    formatted_rows.append(
+      '{indent}{prefix} {value}'.format(
+        indent=indent,
+        prefix=prefix,
+        value=value,
+      )
+    )
+  return formatted_rows
 
 
 def _should_spawn_detached_gui_host(args: argparse.Namespace) -> bool:
@@ -726,11 +827,12 @@ def _build_live_control_plan(args: argparse.Namespace) -> Optional[AndroidToolsC
     bool(args.fastboot_detect),
     args.adb_reboot is not None,
     args.fastboot_reboot is not None,
+    bool(args.inspect_device),
   ]
   if sum(1 for item in requested if item) > 1:
     raise SystemExit(
       'Select only one live companion action at a time: '
-      '--adb-detect, --fastboot-detect, --adb-reboot, or --fastboot-reboot.'
+      '--adb-detect, --fastboot-detect, --adb-reboot, --fastboot-reboot, or --inspect-device.'
     )
   if args.adb_detect:
     return build_adb_detect_command_plan(device_serial=args.device_serial)
@@ -778,11 +880,17 @@ def _render_control_plan(
 def _render_control_trace(
   trace: AndroidToolsNormalizedTrace,
   format_name: str,
+  live_detection=None,
 ) -> str:
   """Render one live-control result for operator review."""
 
+  if live_detection is None:
+    live_detection = _live_detection_for_control_trace(trace)
   if format_name == 'json':
-    return json.dumps(trace.to_dict(), indent=2, sort_keys=True)
+    payload = trace.to_dict()
+    if live_detection is not None:
+      payload['live_detection'] = live_detection.to_dict()
+    return json.dumps(payload, indent=2, sort_keys=True)
 
   lines = [
     'control_result state="{state}" exit_code="{exit_code}" summary="{summary}"'.format(
@@ -803,6 +911,281 @@ def _render_control_trace(
     )
   for note in trace.notes:
     lines.append('control_note="{note}"'.format(note=note))
+  if live_detection is not None:
+    lines.append(
+      'live_detection state="{state}" source="{source}" fallback_posture="{fallback}" device_present="{present}" command_ready="{ready}" summary="{summary}"'.format(
+        state=live_detection.state.value,
+        source=(
+          live_detection.source.value
+          if live_detection.source is not None
+          else 'none'
+        ),
+        fallback=live_detection.fallback_posture.value,
+        present='yes' if live_detection.device_present else 'no',
+        ready='yes' if live_detection.command_ready else 'no',
+        summary=live_detection.summary,
+      )
+    )
+    if live_detection.snapshot is not None:
+      lines.append(
+        'live_identity serial="{serial}" mode="{mode}" transport="{transport}" support_posture="{support}" product="{product}" canonical_product="{canonical}" marketing_name="{name}"'.format(
+          serial=live_detection.snapshot.serial,
+          mode=live_detection.snapshot.mode,
+          transport=live_detection.snapshot.transport,
+          support=live_detection.snapshot.support_posture.value,
+          product=live_detection.snapshot.product_code or 'unknown',
+          canonical=live_detection.snapshot.canonical_product_code or 'unknown',
+          name=live_detection.snapshot.marketing_name or 'unknown',
+        )
+      )
+      lines.append(
+        'live_info posture="{posture}" manufacturer="{manufacturer}" android_version="{android}" security_patch="{patch}" bootloader="{bootloader}"'.format(
+          posture=live_detection.snapshot.info_state.value,
+          manufacturer=live_detection.snapshot.manufacturer or 'unknown',
+          android=live_detection.snapshot.android_version or 'unknown',
+          patch=live_detection.snapshot.security_patch or 'unknown',
+          bootloader=live_detection.snapshot.bootloader_version or 'unknown',
+        )
+      )
+      for hint in live_detection.snapshot.capability_hints:
+        lines.append('live_capability="{hint}"'.format(hint=hint))
+      for guidance in live_detection.snapshot.operator_guidance[:2]:
+        lines.append('live_guidance="{guidance}"'.format(guidance=guidance))
+    if live_detection.fallback_reason:
+      lines.append(
+        'live_fallback_reason="{reason}"'.format(
+          reason=live_detection.fallback_reason,
+        )
+      )
+    for note in live_detection.notes:
+      lines.append('live_detection_note="{note}"'.format(note=note))
+  return '\n'.join(lines)
+
+
+def _live_detection_for_control_trace(
+  trace: AndroidToolsNormalizedTrace,
+):
+  """Return repo-owned live detection truth when the control trace is a detect operation."""
+
+  if trace.command_plan.operation not in (
+    AndroidToolsOperation.ADB_DEVICES,
+    AndroidToolsOperation.FASTBOOT_DEVICES,
+  ):
+    return None
+
+  fallback_posture = LiveFallbackPosture.NOT_NEEDED
+  fallback_reason = None
+  if (
+    trace.command_plan.operation == AndroidToolsOperation.ADB_DEVICES
+    and not trace.detected_devices
+  ):
+    fallback_posture = LiveFallbackPosture.NEEDED
+    fallback_reason = (
+      'ADB did not establish a live device; fastboot is the next supported detect source.'
+    )
+
+  return build_live_detection_session(
+    trace,
+    fallback_posture=fallback_posture,
+    fallback_reason=fallback_reason,
+  )
+
+
+def _enrich_live_detection_for_control_trace(
+  trace: AndroidToolsNormalizedTrace,
+):
+  """Return a repo-owned live snapshot enriched with bounded info when possible."""
+
+  live_detection = _live_detection_for_control_trace(trace)
+  if live_detection is None or live_detection.snapshot is None:
+    return live_detection
+  snapshot = live_detection.snapshot
+  if snapshot.source != LiveDeviceSource.ADB or not snapshot.command_ready:
+    return live_detection
+  info_trace = execute_android_tools_command(
+    build_adb_device_info_command_plan(device_serial=snapshot.serial)
+  )
+  return apply_live_device_info_trace(live_detection, info_trace)
+
+
+def _run_inspect_only_workflow(
+  args: argparse.Namespace,
+  scenario_name: str,
+):
+  """Run the first-class inspect-only workflow and return one evidence report."""
+
+  _validate_package_inputs(args)
+  session = build_demo_session(args.scenario)
+  package_assessment = None
+  if args.package_archive:
+    try:
+      package_assessment = assess_package_archive(
+        Path(args.package_archive),
+        detected_product_code=session.product_code,
+      )
+    except PackageArchiveImportError as error:
+      raise SystemExit(str(error))
+  elif session.guards.package_loaded or args.package_fixture != 'scenario-default':
+    package_assessment = build_demo_package_assessment(
+      args.scenario,
+      session=session,
+      package_fixture_name=args.package_fixture,
+    )
+
+  live_detection = _run_inspect_only_live_detection(args.device_serial)
+  pit_inspection = _run_inspect_only_pit_review(
+    live_detection,
+    package_assessment=package_assessment,
+    output_path=args.pit_output_path,
+  )
+  captured_at_utc = args.captured_at_utc or _utc_now()
+  session = replace(session, live_detection=live_detection)
+  session = replace(
+    session,
+    inspection=build_inspection_workflow(
+      live_detection,
+      pit_inspection=pit_inspection,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+  return build_session_evidence_report(
+    session,
+    scenario_name=scenario_name,
+    package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
+    captured_at_utc=captured_at_utc,
+  )
+
+
+def _run_inspect_only_live_detection(
+  device_serial: Optional[str],
+):
+  """Run the unified inspect-only detection path across ADB and fastboot."""
+
+  adb_trace = execute_android_tools_command(
+    build_adb_detect_command_plan(device_serial=device_serial)
+  )
+  if adb_trace.detected_devices:
+    detection = build_live_detection_session(adb_trace)
+    snapshot = detection.snapshot
+    if snapshot is not None and snapshot.source == LiveDeviceSource.ADB and snapshot.command_ready:
+      info_trace = execute_android_tools_command(
+        build_adb_device_info_command_plan(device_serial=snapshot.serial)
+      )
+      return apply_live_device_info_trace(detection, info_trace)
+    return detection
+
+  fastboot_trace = execute_android_tools_command(
+    build_fastboot_detect_command_plan(device_serial=device_serial)
+  )
+  if fastboot_trace.detected_devices:
+    return build_live_detection_session(
+      fastboot_trace,
+      fallback_posture=LiveFallbackPosture.ENGAGED,
+      fallback_reason=(
+        'ADB did not establish a live device; fastboot captured the active companion.'
+      ),
+      source_labels=('adb', 'fastboot'),
+    )
+  return build_live_detection_session(
+    fastboot_trace,
+    fallback_posture=LiveFallbackPosture.ENGAGED,
+    fallback_reason=(
+      'ADB did not establish a live device; fastboot fallback also failed to capture a live companion.'
+    ),
+    source_labels=('adb', 'fastboot'),
+  )
+
+
+def _run_inspect_only_pit_review(
+  live_detection,
+  package_assessment=None,
+  output_path: str = 'artifacts/device.pit',
+):
+  """Run bounded PIT inspection for the inspect-only workflow."""
+
+  detected_product_code = _inspection_detected_product_code(live_detection)
+  print_trace = execute_heimdall_command(build_print_pit_command_plan())
+  inspection = build_pit_inspection(
+    print_trace,
+    detected_product_code=detected_product_code,
+    package_assessment=package_assessment,
+  )
+  if inspection.state not in (
+    PitInspectionState.FAILED,
+    PitInspectionState.MALFORMED,
+  ):
+    return inspection
+
+  download_trace = execute_heimdall_command(
+    build_download_pit_command_plan(output_path=output_path)
+  )
+  download_inspection = build_pit_inspection(
+    download_trace,
+    detected_product_code=detected_product_code,
+    package_assessment=package_assessment,
+  )
+  if download_inspection.state != PitInspectionState.FAILED:
+    return download_inspection
+  return inspection
+
+
+def _inspection_detected_product_code(live_detection) -> Optional[str]:
+  """Return the best product-code hint available for PIT alignment review."""
+
+  snapshot = live_detection.snapshot
+  if snapshot is None:
+    return None
+  if snapshot.product_code is not None:
+    return snapshot.product_code
+  return snapshot.model_name
+
+
+def _render_inspection_result(report, format_name: str) -> str:
+  """Render one inspect-only result bundle for operator review."""
+
+  if format_name == 'json':
+    payload = report.to_dict()
+    return json.dumps(
+      {
+        'scenario_name': payload['scenario_name'],
+        'session_phase': payload['session_phase'],
+        'summary': payload['summary'],
+        'inspection': payload['inspection'],
+        'device_live': payload['device']['live'],
+        'pit': payload['pit'],
+      },
+      indent=2,
+      sort_keys=True,
+    )
+
+  lines = [
+    'inspection_result posture="{posture}" evidence_ready="{ready}" write_ready="no" reviewed_phase="{phase}" summary="{summary}"'.format(
+      posture=report.inspection.posture,
+      ready='yes' if report.inspection.evidence_ready else 'no',
+      phase=report.session_phase,
+      summary=report.inspection.summary,
+    ),
+    'inspection_live state="{state}" source="{source}" info_state="{info_state}" device_present="{present}" summary="{summary}"'.format(
+      state=report.device.live.state,
+      source=report.device.live.source or 'none',
+      info_state=report.device.live.info_state,
+      present='yes' if report.device.live.device_present else 'no',
+      summary=report.device.live.summary,
+    ),
+    'inspection_pit state="{state}" source="{source}" package_alignment="{alignment}" fallback="{fallback}" summary="{summary}"'.format(
+      state=report.pit.state,
+      source=report.pit.source or 'none',
+      alignment=report.pit.package_alignment,
+      fallback=report.pit.fallback_posture,
+      summary=report.pit.summary,
+    ),
+    'inspection_next="{next_action}"'.format(
+      next_action=report.inspection.next_action,
+    ),
+  ]
+  for boundary in report.inspection.action_boundaries:
+    lines.append('inspection_boundary="{boundary}"'.format(boundary=boundary))
   return '\n'.join(lines)
 
 

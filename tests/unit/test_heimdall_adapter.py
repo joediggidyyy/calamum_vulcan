@@ -16,6 +16,7 @@ from calamum_vulcan.adapters.heimdall import build_detect_device_command_plan
 from calamum_vulcan.adapters.heimdall import build_download_pit_command_plan
 from calamum_vulcan.adapters.heimdall import build_flash_command_plan
 from calamum_vulcan.adapters.heimdall import build_flash_command_plan_from_reviewed_plan
+from calamum_vulcan.adapters.heimdall import build_print_pit_command_plan
 from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
 from calamum_vulcan.adapters.heimdall import replay_heimdall_process_result
 from calamum_vulcan.adapters.heimdall import run_bounded_heimdall_flash_session
@@ -148,6 +149,12 @@ class HeimdallAdapterTests(unittest.TestCase):
     self.assertEqual(command_plan.arguments[0], 'download-pit')
     self.assertIn('--output', command_plan.arguments)
     self.assertIn('artifacts', command_plan.display_command)
+
+  def test_print_pit_plan_remains_bounded_and_explicit(self) -> None:
+    command_plan = build_print_pit_command_plan()
+
+    self.assertEqual(command_plan.arguments, ('print-pit',))
+    self.assertEqual(command_plan.display_command, 'heimdall print-pit')
 
 
 if __name__ == '__main__':

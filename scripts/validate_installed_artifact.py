@@ -304,6 +304,12 @@ def main() -> int:
     raise SystemExit('Installed archive-backed evidence did not preserve device-registry marketing-name resolution.')
   if imported_payload['device']['registry_match_kind'] != 'exact':
     raise SystemExit('Installed archive-backed evidence did not preserve device-registry resolution state.')
+  if imported_payload['pit']['state'] != 'captured':
+    raise SystemExit('Installed archive-backed evidence did not preserve captured PIT inspection state.')
+  if imported_payload['pit']['package_alignment'] != 'matched':
+    raise SystemExit('Installed archive-backed evidence did not preserve PIT/package alignment truth.')
+  if imported_payload['pit']['observed_pit_fingerprint'] != 'PIT-G991U-READY-001':
+    raise SystemExit('Installed archive-backed evidence did not preserve the observed PIT fingerprint.')
 
   evidence_path = output_dir / 'blocked_evidence.json'
   _run(
@@ -323,6 +329,8 @@ def main() -> int:
     raise SystemExit('Installed evidence export lost the blocked preflight gate.')
   if evidence_payload['flash_plan']['ready_for_transport'] is not False:
     raise SystemExit('Installed blocked evidence did not preserve the reviewed flash-plan blocked posture.')
+  if evidence_payload['pit']['package_alignment'] != 'mismatched':
+    raise SystemExit('Installed blocked evidence did not preserve PIT/package mismatch truth.')
 
   suspicious_evidence_path = output_dir / 'suspicious_review_evidence.json'
   suspicious_result = _run(
