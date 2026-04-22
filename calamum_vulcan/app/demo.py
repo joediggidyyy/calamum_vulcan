@@ -8,6 +8,7 @@ from typing import Optional
 from typing import Tuple
 
 from calamum_vulcan.adapters.heimdall import HeimdallNormalizedTrace
+from calamum_vulcan.adapters.heimdall import HeimdallProcessResult
 from calamum_vulcan.adapters.heimdall import apply_heimdall_trace
 from calamum_vulcan.adapters.heimdall import build_command_plan_for_operation
 from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
@@ -64,6 +65,7 @@ SCENARIO_PACKAGE_FIXTURES = {
 }  # type: Dict[str, str]
 
 SCENARIO_ADAPTER_FIXTURES = {
+  'ready': 'flash-success',
   'happy': 'flash-success',
   'failure': 'flash-failure',
   'resume': 'flash-no-reboot-resume',
@@ -77,7 +79,12 @@ SCENARIO_PIT_FIXTURES = {
   'failure': 'pit-print-ready-g973f',
 }  # type: Dict[str, str]
 
+PACKAGE_PIT_FINGERPRINT_FIXTURES = {
+  'PIT-G991U-SUSPICIOUS-001': 'pit-print-suspicious-g991u',
+}  # type: Dict[str, str]
+
 TRANSPORT_SOURCES = ('state-fixture', 'heimdall-adapter')
+DEFAULT_SAFE_PATH_RUNTIME_FIXTURE = 'flash-success'
 
 
 def available_scenarios() -> Tuple[str, ...]:
@@ -183,13 +190,13 @@ def build_demo_pit_inspection(
 
   if session is None:
     session = build_demo_session(name)
-  fixture_name = pit_fixture_name
-  if fixture_name == 'scenario-default':
-    if name not in SCENARIO_PIT_FIXTURES:
-      return None
-    fixture_name = default_pit_fixture_for_scenario(name)
   if package_assessment is None and name in SCENARIO_PACKAGE_FIXTURES:
     package_assessment = build_demo_package_assessment(name, session=session)
+  fixture_name = pit_fixture_name
+  if fixture_name == 'scenario-default':
+    fixture_name = _pit_fixture_for_package(name, package_assessment)
+    if fixture_name is None:
+      return None
 
   process_result = load_heimdall_pit_fixture(fixture_name)
   command_plan = build_command_plan_for_operation(
@@ -204,6 +211,23 @@ def build_demo_pit_inspection(
   )
 
 
+def _pit_fixture_for_package(
+  scenario_name: str,
+  package_assessment: Optional[PackageManifestAssessment],
+) -> Optional[str]:
+  """Return the PIT fixture that best matches the reviewed package truth."""
+
+  if package_assessment is not None:
+    override = PACKAGE_PIT_FINGERPRINT_FIXTURES.get(
+      package_assessment.pit_fingerprint,
+    )
+    if override is not None:
+      return override
+  if scenario_name not in SCENARIO_PIT_FIXTURES:
+    return None
+  return default_pit_fixture_for_scenario(scenario_name)
+
+
 def build_demo_adapter_session(
   name: str,
   package_fixture_name: str = 'scenario-default',
@@ -211,16 +235,17 @@ def build_demo_adapter_session(
 ) -> Tuple[PlatformSession, PackageManifestAssessment, HeimdallNormalizedTrace]:
   """Build one demo session from a normalized Heimdall adapter trace."""
 
-  base_session = replay_events(_adapter_prefix_events(name))
-  package_assessment = build_demo_package_assessment(
+  (
+    base_session,
+    package_assessment,
+    pit_inspection,
+    fixture_name,
+    process_result,
+  ) = build_demo_safe_path_runtime_context(
     name,
-    session=base_session,
     package_fixture_name=package_fixture_name,
+    adapter_fixture_name=adapter_fixture_name,
   )
-  fixture_name = adapter_fixture_name
-  if fixture_name == 'scenario-default':
-    fixture_name = default_adapter_fixture_for_scenario(name)
-  process_result = load_heimdall_process_fixture(fixture_name)
 
   def _runner(command_plan: object) -> object:
     del command_plan
@@ -229,16 +254,69 @@ def build_demo_adapter_session(
   runtime_result = run_bounded_heimdall_flash_session(
     base_session,
     build_reviewed_flash_plan(package_assessment),
+    package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
     runner=_runner,
     fixture_name=fixture_name,
   )
   return runtime_result.session, package_assessment, runtime_result.trace
 
 
+def build_demo_safe_path_runtime_context(
+  name: str,
+  package_fixture_name: str = 'scenario-default',
+  adapter_fixture_name: str = 'scenario-default',
+) -> Tuple[
+  PlatformSession,
+  PackageManifestAssessment,
+  Optional[PitInspection],
+  str,
+  HeimdallProcessResult,
+]:
+  """Return the bounded safe-path runtime inputs for one demo scenario."""
+
+  base_session = _safe_path_runtime_base_session(name)
+  package_assessment = build_demo_package_assessment(
+    name,
+    session=base_session,
+    package_fixture_name=package_fixture_name,
+  )
+  pit_inspection = build_demo_pit_inspection(
+    name,
+    session=base_session,
+    package_assessment=package_assessment,
+  )
+  fixture_name = _resolved_adapter_fixture_name(name, adapter_fixture_name)
+  return (
+    base_session,
+    package_assessment,
+    pit_inspection,
+    fixture_name,
+    load_heimdall_process_fixture(fixture_name),
+  )
+
+
 def available_adapter_fixtures() -> Tuple[str, ...]:
   """Return supported Heimdall process fixtures for CLI and tests."""
 
   return available_heimdall_process_fixtures()
+
+
+def _resolved_adapter_fixture_name(
+  name: str,
+  adapter_fixture_name: str,
+) -> str:
+  if adapter_fixture_name != 'scenario-default':
+    return adapter_fixture_name
+  if name in SCENARIO_ADAPTER_FIXTURES:
+    return default_adapter_fixture_for_scenario(name)
+  return DEFAULT_SAFE_PATH_RUNTIME_FIXTURE
+
+
+def _safe_path_runtime_base_session(name: str) -> PlatformSession:
+  if name in ('happy', 'failure', 'resume'):
+    return replay_events(_adapter_prefix_events(name))
+  return build_demo_session(name)
 
 
 def _adapter_prefix_events(name: str) -> object:

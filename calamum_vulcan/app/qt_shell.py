@@ -30,21 +30,43 @@ from ..adapters.adb_fastboot import build_fastboot_reboot_command_plan
 from ..adapters.adb_fastboot import execute_android_tools_command
 from ..adapters.heimdall import HeimdallCommandPlan
 from ..adapters.heimdall import HeimdallNormalizedTrace
+from ..adapters.heimdall import HeimdallOperation
+from ..adapters.heimdall import HeimdallTraceState
+from ..adapters.heimdall import build_detect_device_command_plan
 from ..adapters.heimdall import build_download_pit_command_plan
+from ..adapters.heimdall import build_flash_command_plan_from_reviewed_plan
 from ..adapters.heimdall import build_print_pit_command_plan
 from ..adapters.heimdall import execute_heimdall_command
+from ..domain.flash_plan import build_reviewed_flash_plan
 from ..domain.live_device import LiveDeviceInfoState
 from ..domain.live_device import LiveDetectionState
 from ..domain.live_device import LiveDeviceSnapshot
+from ..domain.live_device import LiveDeviceSource
 from ..domain.live_device import LiveFallbackPosture
 from ..domain.live_device import apply_live_device_info_trace
+from ..domain.live_device import build_heimdall_live_detection_session
 from ..domain.live_device import build_live_detection_session
+from ..domain.package import PackageArchiveImportError
+from ..domain.package import assess_package_archive
 from ..domain.pit import PitInspection
+from ..domain.pit import PitDeviceAlignment
 from ..domain.pit import PitInspectionState
+from ..domain.pit import PitPackageAlignment
 from ..domain.pit import build_pit_inspection
+from ..domain.preflight import PreflightGate
+from ..domain.preflight import evaluate_preflight
+from ..domain.preflight import preflight_input_from_review_context
 from ..domain.reporting import write_session_evidence_report
+from ..domain.state import PlatformEvent
+from ..domain.state import PlatformSession
+from ..domain.state import RuntimeSessionRejected
+from ..domain.state import SessionEventType
+from ..domain.state import SessionPhase
+from ..domain.state import TransitionRejected
 from ..domain.state import build_inspection_workflow
+from ..domain.state import ensure_safe_path_runtime_ready
 from ..domain.state import inspection_in_progress
+from ..domain.state import replay_events
 from .qt_compat import QT_AVAILABLE
 from .qt_compat import QtCore
 from .qt_compat import QtGui
@@ -62,6 +84,7 @@ from .style import metric_style
 from .style import mono_terminal_style
 from .style import panel_style
 from .style import pill_style
+from .view_models import ControlActionSection
 from .view_models import PanelViewModel
 from .view_models import ShellViewModel
 from .view_models import build_shell_view_model
@@ -121,6 +144,8 @@ else:
   GUI_EVENT_LOOP_STALL_SECONDS = 5.0
   GUI_EVENT_LOOP_POLL_SECONDS = 0.25
   GUI_EVENT_LOOP_HEARTBEAT_MS = 250
+  GUI_DISCONNECT_MONITOR_INTERVAL_MS = 1500
+  GUI_DISCONNECT_CLEAR_DEBOUNCE_MS = 2500
 
 
   def _write_gui_runtime_diagnostic(
@@ -421,6 +446,15 @@ else:
     scroll.viewport().setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
 
 
+  def _should_launch_maximized(duration_ms: int) -> bool:
+    """Return whether the shell should launch maximized for operator sessions."""
+
+    if duration_ms > 0:
+      return False
+    platform_name = os.environ.get('QT_QPA_PLATFORM', '').strip().lower()
+    return platform_name != 'offscreen'
+
+
   class _CompanionCommandWorker(QtCore.QObject):
     """Background worker that runs one live companion command off the UI thread."""
 
@@ -457,6 +491,45 @@ else:
         self.finished.emit(None, str(error))
         return
       self.finished.emit(trace, None)
+
+
+  class _DisconnectMonitorWorker(QtCore.QObject):
+    """Background worker that silently re-checks whether the active device is still present."""
+
+    finished = QtCore.Signal(object, object, object, object)
+
+    def __init__(
+      self,
+      command_plan: object,
+      expected_source: str,
+      expected_serial: Optional[str],
+    ) -> None:
+      super().__init__()
+      self._command_plan = command_plan
+      self._expected_source = expected_source
+      self._expected_serial = expected_serial
+
+    @QtCore.Slot()
+    def run(self) -> None:
+      try:
+        if isinstance(self._command_plan, AndroidToolsCommandPlan):
+          trace = execute_android_tools_command(self._command_plan)
+        else:
+          trace = execute_heimdall_command(self._command_plan)
+      except Exception as error:  # pragma: no cover - defensive runtime bridge
+        self.finished.emit(
+          self._expected_source,
+          self._expected_serial,
+          None,
+          str(error),
+        )
+        return
+      self.finished.emit(
+        self._expected_source,
+        self._expected_serial,
+        trace,
+        None,
+      )
 
 
   class BrandMark(QtWidgets.QFrame):
@@ -883,6 +956,7 @@ else:
     """Main desktop shell for the FS-03 GUI implementation."""
 
     _live_command_result_ready = QtCore.Signal(object, object, object)
+    _heimdall_command_result_ready = QtCore.Signal(object, object, object)
     _pit_command_result_ready = QtCore.Signal(object, object, object)
 
     def __init__(self, model: ShellViewModel) -> None:
@@ -891,7 +965,9 @@ else:
       self._ui_scale = DEFAULT_UI_SCALE
       self._zoom_shortcuts = []
       self._panel_titles = tuple(panel.title for panel in model.panels)
-      self._action_labels = tuple(action.label for action in model.control_actions)
+      self._action_labels = tuple(
+        action.label for action in model.control_actions if action.visible
+      )
       self._base_session = model.session
       self._base_package_assessment = model.package_assessment
       self._base_pit_inspection = model.pit_inspection
@@ -920,15 +996,49 @@ else:
       self._live_command_worker = None
       self._retained_live_command_objects = []
       self._live_completion_handlers = {}
+      self._heimdall_command_thread = None
+      self._heimdall_command_worker = None
+      self._retained_heimdall_command_objects = []
+      self._heimdall_completion_handlers = {}
+      self._disconnect_monitor_thread = None
+      self._disconnect_monitor_worker = None
+      self._retained_disconnect_monitor_objects = []
+      self._disconnect_monitor_armed = False
+      self._pending_disconnect_detection = None
       self._pit_command_thread = None
       self._pit_command_worker = None
       self._retained_pit_command_objects = []
       self._pit_completion_handlers = {}
       self._live_command_in_progress = False
       self._last_live_command_result_on_gui_thread = None
+      self._pending_close_after_worker_teardown = False
       self._wait_cursor_active = False
+      self._disconnect_monitor_timer = QtCore.QTimer(self)
+      self._disconnect_monitor_timer.setInterval(
+        GUI_DISCONNECT_MONITOR_INTERVAL_MS
+      )
+      self._disconnect_monitor_timer.timeout.connect(
+        self._poll_disconnect_state
+      )
+      self._disconnect_clear_timer = QtCore.QTimer(self)
+      self._disconnect_clear_timer.setSingleShot(True)
+      self._disconnect_clear_timer.setInterval(
+        GUI_DISCONNECT_CLEAR_DEBOUNCE_MS
+      )
+      self._disconnect_clear_timer.timeout.connect(
+        self._apply_debounced_disconnect_clear
+      )
+      self._disconnect_recheck_timer = QtCore.QTimer(self)
+      self._disconnect_recheck_timer.setSingleShot(True)
+      self._disconnect_recheck_timer.timeout.connect(
+        self._poll_disconnect_state
+      )
       self._live_command_result_ready.connect(
         self._handle_live_command_result,
+        QtCore.Qt.ConnectionType.QueuedConnection,
+      )
+      self._heimdall_command_result_ready.connect(
+        self._handle_heimdall_command_result,
         QtCore.Qt.ConnectionType.QueuedConnection,
       )
       self._pit_command_result_ready.connect(
@@ -949,7 +1059,7 @@ else:
       return self._panel_titles
 
     def action_labels(self) -> Tuple[str, ...]:
-      """Return control labels for validation and sandbox review."""
+      """Return rendered control labels for validation and sandbox review."""
 
       return self._action_labels
 
@@ -1067,6 +1177,12 @@ else:
       splitter.setChildrenCollapsible(False)
       root_layout.addWidget(splitter, 1)
 
+      primary_pane = QtWidgets.QWidget()
+      primary_pane.setObjectName('primary-pane-shell')
+      primary_pane_layout = QtWidgets.QVBoxLayout(primary_pane)
+      primary_pane_layout.setContentsMargins(0, 0, 0, 0)
+      primary_pane_layout.setSpacing(self._scaled(18))
+
       primary_scroll = QtWidgets.QScrollArea()
       _configure_hidden_scroll_area(primary_scroll, 'main-pane-scroll')
       primary_frame = QtWidgets.QFrame()
@@ -1075,14 +1191,16 @@ else:
       primary.setSpacing(self._scaled(18))
       primary.setContentsMargins(0, 0, 0, 0)
 
+      brand_mark = BrandMark(self._model, self._ui_scale)
+      primary_pane_layout.addWidget(brand_mark)
+      primary_pane_layout.addWidget(primary_scroll, 1)
+
       control_deck = self._build_control_deck()
-      splitter.addWidget(primary_scroll)
+      splitter.addWidget(primary_pane)
       splitter.addWidget(control_deck)
       splitter.setStretchFactor(0, 4)
       splitter.setStretchFactor(1, 1)
       splitter.setSizes([1380, 380])
-
-      primary.addWidget(BrandMark(self._model, self._ui_scale))
 
       dashboard = self._build_dashboard_widget()
       primary.addWidget(
@@ -1144,6 +1262,7 @@ else:
       return widget
 
     def _build_control_deck(self) -> QtWidgets.QScrollArea:
+      self._control_action_buttons = {}
       scroll = QtWidgets.QScrollArea()
       _configure_hidden_scroll_area(scroll, 'control-deck-scroll')
       scroll.setMinimumWidth(self._scaled(360))
@@ -1177,7 +1296,7 @@ else:
         'font-size: {size}px; font-weight: 900;'.format(size=self._scaled(25))
       )
       deck_note = QtWidgets.QLabel(
-        'Detect device stays a quick live probe. Inspect device runs the first-class read-side lane: detect/info plus PIT review and exportable evidence, still without opening a write path.'
+        'Primary flow: Detect device -> Read PIT -> Load package -> Execute flash plan -> Export evidence. Continue after recovery appears only when a real bounded resume handoff exists.'
       )
       deck_note.setWordWrap(True)
       deck_note.setStyleSheet(control_hint_style(self._ui_scale))
@@ -1185,50 +1304,38 @@ else:
       layout.addWidget(title)
       layout.addWidget(deck_note)
 
-      for action in self._model.control_actions:
-        hint_text = action.hint
-        button_emphasis = action.emphasis
-        button = QtWidgets.QPushButton(action.label)
-        button.setObjectName(_action_object_name(action.label))
-        button.setProperty('shell_base_enabled', action.enabled)
-        if action.label == 'Detect device':
-          hint_text = (
-            'Auto-detect the active live companion through ADB first, then '
-            'fastboot if needed.'
-          )
-          button.clicked.connect(self._probe_live_device)
-        elif action.label == 'Inspect device':
-          hint_text = (
-            'Run the inspect-only lane: quick live detection, bounded device '
-            'info, PIT review, and exportable evidence without opening a '
-            'write path.'
-          )
-          button.clicked.connect(self._run_inspect_workflow)
-        elif action.label == 'Export evidence':
-          hint_text = (
-            'Export the current read-side evidence bundle to Markdown or JSON.'
-          )
-          button.clicked.connect(self._export_evidence_report)
-        else:
-          button_emphasis = 'normal'
-          hint_text = self._placeholder_action_hint(action.label, action.hint)
-          button.clicked.connect(
-            lambda _checked=False, action_label=action.label, action_hint=hint_text: (
-              self._handle_placeholder_action(action_label, action_hint)
-            )
-          )
-        button.setProperty('shell_button_emphasis', button_emphasis)
-        button.setEnabled(action.enabled)
-        button.setStyleSheet(
-          action_button_style(button_emphasis, action.enabled, self._ui_scale)
-        )
-        layout.addWidget(button)
-        self._control_action_buttons[action.label] = button
+      primary_actions = tuple(
+        action
+        for action in self._model.control_actions
+        if action.visible and action.section == ControlActionSection.PRIMARY
+      )
+      contextual_actions = tuple(
+        action
+        for action in self._model.control_actions
+        if action.visible and action.section == ControlActionSection.CONTEXTUAL
+      )
 
-        hint = QtWidgets.QLabel(hint_text)
-        hint.setWordWrap(True)
-        hint.setStyleSheet(control_hint_style(self._ui_scale))
-        layout.addWidget(hint)
+      for action in primary_actions:
+        self._add_control_action(layout, action)
+
+      if contextual_actions:
+        layout.addSpacing(self._scaled(8))
+        contextual_eyebrow = QtWidgets.QLabel('RECOVERY')
+        contextual_eyebrow.setStyleSheet(
+          'color: {muted}; font-size: {size}px; font-weight: 800; letter-spacing: 1.2px;'.format(
+            muted=COLOR_TOKENS['muted'],
+            size=self._scaled(11),
+          )
+        )
+        contextual_note = QtWidgets.QLabel(
+          'Contextual recovery actions are shown only when the bounded runtime lane has paused and a real manual handoff exists.'
+        )
+        contextual_note.setWordWrap(True)
+        contextual_note.setStyleSheet(control_hint_style(self._ui_scale))
+        layout.addWidget(contextual_eyebrow)
+        layout.addWidget(contextual_note)
+        for action in contextual_actions:
+          self._add_control_action(layout, action)
 
       layout.addSpacing(self._scaled(12))
 
@@ -1240,7 +1347,7 @@ else:
         )
       )
       companion_summary = QtWidgets.QLabel(
-        'Detect device checks ADB, then fastboot. Reboot unlocks after detection.'
+        'Detect device checks ADB, then fastboot, then Samsung download mode via Heimdall. Reboot unlocks after detection.'
       )
       companion_summary.setWordWrap(True)
       companion_summary.setStyleSheet(control_hint_style(self._ui_scale))
@@ -1302,6 +1409,50 @@ else:
 
       layout.addStretch(1)
       return scroll
+
+    def _add_control_action(
+      self,
+      layout: QtWidgets.QVBoxLayout,
+      action,
+    ) -> None:
+      """Render one control-deck action button plus its hint line."""
+
+      hint_text = action.hint
+      button_emphasis = action.emphasis
+      button = QtWidgets.QPushButton(action.label)
+      button.setObjectName(_action_object_name(action.label))
+      button.setProperty('shell_base_enabled', action.enabled)
+      if action.label == 'Detect device':
+        button.clicked.connect(self._probe_live_device)
+      elif action.label == 'Read PIT':
+        button.clicked.connect(self._run_read_pit_workflow)
+      elif action.label == 'Load package':
+        button.clicked.connect(self._load_package_archive)
+      elif action.label == 'Execute flash plan':
+        button.clicked.connect(self._run_execute_flash_plan_workflow)
+      elif action.label == 'Export evidence':
+        button.clicked.connect(self._export_evidence_report)
+      elif action.label == 'Continue after recovery':
+        button.clicked.connect(self._continue_after_recovery)
+      else:
+        hint_text = self._placeholder_action_hint(action.label, action.hint)
+        button.clicked.connect(
+          lambda _checked=False, action_label=action.label, action_hint=hint_text: (
+            self._handle_placeholder_action(action_label, action_hint)
+          )
+        )
+      button.setProperty('shell_button_emphasis', button_emphasis)
+      button.setEnabled(action.enabled)
+      button.setStyleSheet(
+        action_button_style(button_emphasis, action.enabled, self._ui_scale)
+      )
+      layout.addWidget(button)
+      self._control_action_buttons[action.label] = button
+
+      hint = QtWidgets.QLabel(hint_text)
+      hint.setWordWrap(True)
+      hint.setStyleSheet(control_hint_style(self._ui_scale))
+      layout.addWidget(hint)
 
     def _build_log_panel(self) -> QtWidgets.QFrame:
       frame = QtWidgets.QFrame()
@@ -1416,6 +1567,7 @@ else:
             self._ui_scale,
           )
         )
+      self._refresh_disconnect_monitor()
 
     def _adb_reboot_emphasis(self) -> str:
       """Return button emphasis for the currently selected ADB target."""
@@ -1459,6 +1611,256 @@ else:
           self._wait_cursor_active = False
       self._refresh_live_controls()
 
+    def _clear_live_identity_labels(self) -> None:
+      """Blank the live identity labels and cached serials."""
+
+      self._live_adb_serial = None
+      self._live_fastboot_serial = None
+      self._live_adb_identity = 'ADB: --'
+      self._live_fastboot_identity = 'Fastboot: --'
+
+    def _cancel_pending_disconnect_clear(self) -> None:
+      """Cancel any pending debounced disconnect clear."""
+
+      if self._disconnect_clear_timer.isActive():
+        self._disconnect_clear_timer.stop()
+      if self._disconnect_recheck_timer.isActive():
+        self._disconnect_recheck_timer.stop()
+      self._pending_disconnect_detection = None
+
+    def _disconnect_recheck_delay_ms(self) -> int:
+      """Return the one-shot recheck delay used while a disconnect clear is pending."""
+
+      clear_interval = max(1, self._disconnect_clear_timer.interval())
+      monitor_interval = max(1, self._disconnect_monitor_timer.interval())
+      return max(1, min(monitor_interval, clear_interval // 2))
+
+    def _disconnect_monitor_snapshot(self) -> Optional[LiveDeviceSnapshot]:
+      """Return the current live snapshot when passive disconnect monitoring is allowed."""
+
+      if not self._disconnect_monitor_armed:
+        return None
+      if self._base_session.phase in (
+        SessionPhase.EXECUTING,
+        SessionPhase.RESUME_NEEDED,
+        SessionPhase.COMPLETED,
+        SessionPhase.FAILED,
+      ):
+        return None
+      snapshot = self._base_session.live_detection.snapshot
+      if snapshot is None or not snapshot.command_ready:
+        return None
+      return snapshot
+
+    def _disconnect_monitor_supported(self) -> bool:
+      """Return whether automatic passive disconnect monitoring should run in this Qt platform."""
+
+      platform_name = os.getenv('QT_QPA_PLATFORM', '').strip().lower()
+      return platform_name not in ('offscreen', 'minimal')
+
+    def _refresh_disconnect_monitor(self) -> None:
+      """Start or stop passive disconnect monitoring based on the current shell state."""
+
+      if not self._disconnect_monitor_supported():
+        self._disconnect_monitor_timer.stop()
+        self._cancel_pending_disconnect_clear()
+        return
+      if self._live_command_in_progress:
+        self._disconnect_monitor_timer.stop()
+        self._cancel_pending_disconnect_clear()
+        return
+      if self._disconnect_monitor_snapshot() is None:
+        self._disconnect_monitor_timer.stop()
+        self._cancel_pending_disconnect_clear()
+        return
+      if self._disconnect_clear_timer.isActive():
+        self._disconnect_monitor_timer.stop()
+        return
+      if not self._disconnect_monitor_timer.isActive():
+        self._disconnect_monitor_timer.start()
+
+    def _disconnect_monitor_thread_running(self) -> bool:
+      """Return whether one passive disconnect monitor thread is still active."""
+
+      retained_threads = [
+        retained[0] for retained in self._retained_disconnect_monitor_objects
+      ]
+      for thread in retained_threads + [self._disconnect_monitor_thread]:
+        if thread is None:
+          continue
+        is_running = getattr(thread, 'isRunning', None)
+        if not callable(is_running):
+          continue
+        try:
+          if bool(is_running()):
+            return True
+        except RuntimeError:
+          continue
+      return False
+
+    def _poll_disconnect_state(self) -> None:
+      """Silently re-check whether the active live device is still attached."""
+
+      if self._live_command_in_progress or self._disconnect_monitor_thread_running():
+        return
+      snapshot = self._disconnect_monitor_snapshot()
+      if snapshot is None:
+        self._disconnect_monitor_timer.stop()
+        self._cancel_pending_disconnect_clear()
+        return
+      command_plan = self._disconnect_monitor_command_plan(snapshot)
+      if command_plan is None:
+        self._disconnect_monitor_timer.stop()
+        self._cancel_pending_disconnect_clear()
+        return
+      self._start_disconnect_monitor(
+        command_plan,
+        snapshot.source.value,
+        snapshot.serial,
+      )
+
+    def _disconnect_monitor_command_plan(
+      self,
+      snapshot: LiveDeviceSnapshot,
+    ) -> Optional[object]:
+      """Return the detect command plan used for passive disconnect monitoring."""
+
+      if snapshot.source == LiveDeviceSource.ADB:
+        return build_adb_detect_command_plan(device_serial=snapshot.serial)
+      if snapshot.source == LiveDeviceSource.FASTBOOT:
+        return build_fastboot_detect_command_plan(device_serial=snapshot.serial)
+      if snapshot.source == LiveDeviceSource.HEIMDALL:
+        return build_detect_device_command_plan()
+      return None
+
+    def _start_disconnect_monitor(
+      self,
+      command_plan: object,
+      expected_source: str,
+      expected_serial: Optional[str],
+    ) -> None:
+      """Run one silent background disconnect re-check without changing the busy state."""
+
+      thread = QtCore.QThread()
+      worker = _DisconnectMonitorWorker(
+        command_plan,
+        expected_source,
+        expected_serial,
+      )
+      self._retained_disconnect_monitor_objects.append((thread, worker))
+      worker.moveToThread(thread)
+      thread.started.connect(worker.run)
+      worker.finished.connect(
+        self._handle_disconnect_monitor_result,
+        QtCore.Qt.ConnectionType.QueuedConnection,
+      )
+      worker.finished.connect(thread.quit)
+      worker.finished.connect(worker.deleteLater)
+      thread.finished.connect(
+        lambda thread=thread, worker=worker: (
+          self._finalize_disconnect_monitor_thread(thread, worker)
+        )
+      )
+      thread.finished.connect(thread.deleteLater)
+      self._disconnect_monitor_thread = thread
+      self._disconnect_monitor_worker = worker
+      thread.start()
+
+    def _finalize_disconnect_monitor_thread(
+      self,
+      thread,
+      worker,
+    ) -> None:
+      """Release retained disconnect-monitor Qt objects after the thread exits."""
+
+      self._retained_disconnect_monitor_objects = [
+        retained
+        for retained in self._retained_disconnect_monitor_objects
+        if retained[0] is not thread
+      ]
+      if self._disconnect_monitor_thread is thread:
+        self._disconnect_monitor_thread = None
+      if self._disconnect_monitor_worker is worker:
+        self._disconnect_monitor_worker = None
+      self._complete_pending_close_after_worker_teardown()
+
+    @QtCore.Slot(object, object, object, object)
+    def _handle_disconnect_monitor_result(
+      self,
+      expected_source: object,
+      expected_serial: object,
+      trace: object,
+      error_message: object,
+    ) -> None:
+      """Apply one passive disconnect-monitor result without spamming the operator surface."""
+
+      del error_message
+      snapshot = self._disconnect_monitor_snapshot()
+      if snapshot is None:
+        self._cancel_pending_disconnect_clear()
+        return
+      if snapshot.source.value != str(expected_source):
+        return
+      if expected_serial is not None and snapshot.serial != str(expected_serial):
+        return
+
+      detection = None
+      if isinstance(trace, AndroidToolsNormalizedTrace):
+        detection = build_live_detection_session(
+          trace,
+          fallback_posture=self._base_session.live_detection.fallback_posture,
+          fallback_reason=self._base_session.live_detection.fallback_reason,
+          source_labels=self._base_session.live_detection.source_labels,
+        )
+      elif isinstance(trace, HeimdallNormalizedTrace):
+        detection = build_heimdall_live_detection_session(
+          trace,
+          source_labels=self._base_session.live_detection.source_labels,
+          treat_missing_device_as_cleared=True,
+        )
+
+      if detection is None:
+        self._cancel_pending_disconnect_clear()
+        self._refresh_disconnect_monitor()
+        return
+      if detection.snapshot is not None:
+        self._cancel_pending_disconnect_clear()
+        self._refresh_disconnect_monitor()
+        return
+      if detection.state != LiveDetectionState.CLEARED:
+        self._cancel_pending_disconnect_clear()
+        self._refresh_disconnect_monitor()
+        return
+
+      if self._disconnect_clear_timer.isActive():
+        return
+      self._pending_disconnect_detection = detection
+      self._disconnect_monitor_timer.stop()
+      self._disconnect_clear_timer.start()
+      self._disconnect_recheck_timer.start(self._disconnect_recheck_delay_ms())
+
+    def _apply_debounced_disconnect_clear(self) -> None:
+      """Clear stale live-device fields after the disconnect debounce window expires."""
+
+      if self._live_command_in_progress:
+        return
+      detection = self._pending_disconnect_detection
+      self._pending_disconnect_detection = None
+      self._disconnect_recheck_timer.stop()
+      if detection is None:
+        return
+      self._clear_live_identity_labels()
+      self._set_live_detection(detection)
+      self._append_live_log_lines(
+        (
+          '[COMPANION-CLEAR] Cleared stale live-device fields after the disconnect debounce window.',
+        )
+      )
+      self._set_live_status(
+        'The active live device disconnected; stale GUI fields were cleared after a short debounce window.',
+        'warning',
+      )
+
     def _append_live_log_lines(self, lines: Tuple[str, ...]) -> None:
       """Append new live-control lines to the operational log."""
 
@@ -1501,6 +1903,14 @@ else:
       self._live_command_thread = None
       self._live_command_worker = None
       self._live_completion_handlers.clear()
+      self._heimdall_command_thread = None
+      self._heimdall_command_worker = None
+      self._heimdall_completion_handlers.clear()
+      self._disconnect_monitor_timer.stop()
+      self._cancel_pending_disconnect_clear()
+      self._pit_command_thread = None
+      self._pit_command_worker = None
+      self._pit_completion_handlers.clear()
       self._set_live_busy(False)
       message = (
         '{context} failed before command completion: {error_type}: {error}. '
@@ -1519,7 +1929,7 @@ else:
       self._set_live_status(message, 'danger')
 
     def _probe_live_device(self) -> None:
-      """Auto-detect one live companion across ADB and fastboot."""
+      """Auto-detect one live companion across ADB, fastboot, and Heimdall."""
 
       try:
         self._start_live_command(
@@ -1570,6 +1980,8 @@ else:
         return
 
       self._boot_unhydrated = False
+      self._disconnect_monitor_timer.stop()
+      self._cancel_pending_disconnect_clear()
       self._set_live_status(pending_text, 'info')
       self._append_live_log_lines(
         ('[COMPANION-PENDING] {command}'.format(
@@ -1578,7 +1990,7 @@ else:
       )
       self._set_live_busy(True)
 
-      thread = QtCore.QThread(self)
+      thread = QtCore.QThread()
       worker = _CompanionCommandWorker(command_plan)
       command_key = id(worker)
       self._live_completion_handlers[command_key] = completion_handler
@@ -1625,6 +2037,81 @@ else:
         self._live_command_thread = None
       if self._live_command_worker is worker:
         self._live_command_worker = None
+      self._complete_pending_close_after_worker_teardown()
+
+    def _start_heimdall_command(
+      self,
+      command_plan: HeimdallCommandPlan,
+      pending_text: str,
+      completion_handler,
+    ) -> None:
+      """Run one bounded Heimdall detect command in a worker thread."""
+
+      if self._live_command_in_progress:
+        self._set_live_status(
+          'Wait for the current live companion action to finish before sending another command.',
+          'warning',
+        )
+        return
+
+      self._disconnect_monitor_timer.stop()
+      self._cancel_pending_disconnect_clear()
+      self._set_live_status(pending_text, 'info')
+      self._append_live_log_lines(
+        ('[COMPANION-PENDING] {command}'.format(
+          command=command_plan.display_command,
+        ),)
+      )
+      self._set_live_busy(True)
+
+      thread = QtCore.QThread()
+      worker = _HeimdallCommandWorker(command_plan)
+      command_key = id(worker)
+      self._heimdall_completion_handlers[command_key] = completion_handler
+      self._retained_heimdall_command_objects.append((thread, worker, command_key))
+      worker.moveToThread(thread)
+      thread.started.connect(worker.run)
+      worker.finished.connect(
+        lambda trace, error_message, command_key=command_key: (
+          self._heimdall_command_result_ready.emit(
+            command_key,
+            trace,
+            error_message,
+          )
+        )
+      )
+      worker.finished.connect(thread.quit)
+      worker.finished.connect(worker.deleteLater)
+      thread.finished.connect(
+        lambda command_key=command_key, thread=thread, worker=worker: (
+          self._finalize_heimdall_command_thread(command_key, thread, worker)
+        )
+      )
+      thread.finished.connect(thread.deleteLater)
+
+      self._heimdall_command_thread = thread
+      self._heimdall_command_worker = worker
+      thread.start()
+
+    def _finalize_heimdall_command_thread(
+      self,
+      command_key: object,
+      thread,
+      worker,
+    ) -> None:
+      """Release retained Heimdall-command Qt objects only after the thread exits."""
+
+      self._heimdall_completion_handlers.pop(command_key, None)
+      self._retained_heimdall_command_objects = [
+        retained
+        for retained in self._retained_heimdall_command_objects
+        if retained[0] is not thread
+      ]
+      if self._heimdall_command_thread is thread:
+        self._heimdall_command_thread = None
+      if self._heimdall_command_worker is worker:
+        self._heimdall_command_worker = None
+      self._complete_pending_close_after_worker_teardown()
 
     def _start_pit_command(
       self,
@@ -1641,6 +2128,8 @@ else:
         )
         return
 
+      self._disconnect_monitor_timer.stop()
+      self._cancel_pending_disconnect_clear()
       self._set_live_status(pending_text, 'info')
       self._append_live_log_lines(
         ('[INSPECTION-PENDING] {command}'.format(
@@ -1649,7 +2138,7 @@ else:
       )
       self._set_live_busy(True)
 
-      thread = QtCore.QThread(self)
+      thread = QtCore.QThread()
       worker = _HeimdallCommandWorker(command_plan)
       command_key = id(worker)
       self._pit_completion_handlers[command_key] = completion_handler
@@ -1696,6 +2185,7 @@ else:
         self._pit_command_thread = None
       if self._pit_command_worker is worker:
         self._pit_command_worker = None
+      self._complete_pending_close_after_worker_teardown()
 
     @QtCore.Slot(object, object, object)
     def _handle_live_command_result(
@@ -1727,6 +2217,7 @@ else:
         )
         return
 
+      self._disconnect_monitor_armed = True
       self._append_live_log_lines(self._render_live_trace_lines(trace))
       if completion_handler is not None:
         try:
@@ -1739,6 +2230,66 @@ else:
           message = (
             'Live companion processing failed after command completion: '
             '{error_type}: {error}. Details were written to: {path}'.format(
+              error_type=type(error).__name__,
+              error=error,
+              path=log_path,
+            )
+          )
+          self._append_live_log_lines(
+            ('[COMPANION-ERROR] {message}'.format(message=message),)
+          )
+          self._set_live_status(message, 'danger')
+
+    @QtCore.Slot(object, object, object)
+    def _handle_heimdall_command_result(
+      self,
+      command_key: object,
+      trace: object,
+      error_message: object,
+    ) -> None:
+      """Apply one completed Heimdall live command on the UI thread."""
+
+      completion_handler = self._heimdall_completion_handlers.pop(command_key, None)
+      self._set_live_busy(False)
+
+      if error_message:
+        message = str(error_message)
+        self._append_live_log_lines(('[COMPANION-ERROR] {message}'.format(
+          message=message,
+        ),))
+        self._set_live_status(message, 'danger')
+        return
+
+      if not isinstance(trace, HeimdallNormalizedTrace):
+        self._set_live_status(
+          'Heimdall live detection returned an unexpected result shape.',
+          'danger',
+        )
+        return
+
+      self._disconnect_monitor_armed = True
+      self._append_live_log_lines(self._render_heimdall_trace_lines(trace))
+      diagnostic_path = self._archive_heimdall_detect_diagnostic(trace)
+      if diagnostic_path is not None:
+        self._append_live_log_lines(
+          (
+            '[COMPANION-DIAG] archived Heimdall detect stdout/stderr to {path}'.format(
+              path=diagnostic_path,
+            ),
+          )
+        )
+      if completion_handler is not None:
+        try:
+          completion_handler(trace)
+        except Exception as error:  # pragma: no cover - defensive GUI guardrail
+          log_path = self._record_live_runtime_failure(
+            'Heimdall live detection processing',
+            error,
+          )
+          message = (
+            'Heimdall live detection processing failed after command '
+            'completion: {error_type}: {error}. Details were written to: '
+            '{path}'.format(
               error_type=type(error).__name__,
               error=error,
               path=log_path,
@@ -1802,20 +2353,513 @@ else:
       """Return honest Qt-shell wording for review-only control-deck actions."""
 
       placeholder_hints = {
-        'Load package': (
-          'GUI placeholder. Stage firmware through the CLI or fixture selection.'
-        ),
-        'Execute flash plan': (
-          'GUI placeholder. Live flash execution is not exposed here yet.'
-        ),
-        'Resume workflow': (
-          'GUI placeholder. Resume remains scenario-backed in this stage.'
+        'Continue after recovery': (
+          'Complete the recorded manual recovery step, then finalize the bounded safe-path handoff before exporting evidence.'
         ),
       }
       return placeholder_hints.get(
         action_label,
         'GUI placeholder. ' + fallback_hint,
       )
+
+    def _run_read_pit_workflow(self) -> None:
+      """Run bounded PIT review against the current Samsung download-mode snapshot."""
+
+      try:
+        self._boot_unhydrated = False
+        snapshot = self._current_download_mode_snapshot()
+        if snapshot is None:
+          message = (
+            'Read PIT requires an active Samsung download-mode device detected '
+            'via Heimdall. Run Detect device first.'
+          )
+          self._append_live_log_lines(
+            ('[PIT-READ-BLOCK] {message}'.format(message=message),)
+          )
+          self._set_live_status(message, 'warning')
+          return
+        self._base_pit_inspection = None
+        self._base_session = replace(
+          self._base_session,
+          inspection=inspection_in_progress(
+            summary='Read PIT is running against the current Samsung download-mode snapshot.',
+            captured_at_utc=_utc_now(),
+          ),
+        )
+        self._append_live_log_lines(
+          ('[PIT-READ] Bounded PIT review started.',)
+        )
+        self._start_pit_command(
+          build_print_pit_command_plan(),
+          'Read PIT: capturing bounded Samsung partition truth via Heimdall print-pit…',
+          self._apply_read_pit_print_trace,
+        )
+      except Exception as error:  # pragma: no cover - defensive GUI guardrail
+        self._handle_live_action_exception('Read PIT', error)
+
+    def _apply_read_pit_print_trace(
+      self,
+      trace: HeimdallNormalizedTrace,
+    ) -> None:
+      """Handle the print-pit stage for the direct Read PIT workflow."""
+
+      inspection = build_pit_inspection(
+        trace,
+        detected_product_code=self._inspection_detected_product_code(),
+        package_assessment=self._base_package_assessment,
+      )
+      if inspection.state in (
+        PitInspectionState.FAILED,
+        PitInspectionState.MALFORMED,
+      ):
+        self._append_live_log_lines(
+          (
+            '[PIT-READ] print-pit did not yield trustworthy partition rows; attempting metadata-only download-pit fallback.',
+          )
+        )
+        self._start_pit_command(
+          build_download_pit_command_plan(output_path='artifacts/device.pit'),
+          'Read PIT: attempting metadata-only download-pit fallback…',
+          self._apply_read_pit_download_trace,
+        )
+        return
+      self._finish_read_pit_workflow(inspection)
+
+    def _apply_read_pit_download_trace(
+      self,
+      trace: HeimdallNormalizedTrace,
+    ) -> None:
+      """Finish the direct Read PIT workflow after metadata-only fallback."""
+
+      inspection = build_pit_inspection(
+        trace,
+        detected_product_code=self._inspection_detected_product_code(),
+        package_assessment=self._base_package_assessment,
+      )
+      self._finish_read_pit_workflow(inspection)
+
+    def _finish_read_pit_workflow(
+      self,
+      pit_inspection: Optional[PitInspection],
+    ) -> None:
+      """Persist the PIT-only review posture and refresh the shell surfaces."""
+
+      inspection = build_inspection_workflow(
+        self._base_session.live_detection,
+        pit_inspection=pit_inspection,
+        captured_at_utc=_utc_now(),
+      )
+      self._base_pit_inspection = pit_inspection
+      self._base_session = replace(
+        self._base_session,
+        inspection=inspection,
+      )
+      self._sync_reviewed_session_state()
+      self._append_live_log_lines(
+        (
+          '[PIT-SUMMARY] {summary}'.format(
+            summary=(
+              pit_inspection.summary
+              if pit_inspection is not None
+              else 'No PIT inspection was captured.'
+            ),
+          ),
+          '[INSPECTION-NEXT] {action}'.format(action=inspection.next_action),
+        )
+      )
+      self._set_live_status(
+        pit_inspection.summary if pit_inspection is not None else inspection.summary,
+        self._pit_status_tone(pit_inspection),
+      )
+
+    def _preflight_notes_from_report(self, report) -> Tuple[str, ...]:
+      """Return compact preflight-note lines that keep the reviewed session explicit."""
+
+      notes = []
+      recommended_action = getattr(report, 'recommended_action', None)
+      if isinstance(recommended_action, str) and recommended_action:
+        notes.append(recommended_action)
+      for signal in getattr(report, 'signals', ()): 
+        summary = getattr(signal, 'summary', None)
+        if not isinstance(summary, str) or not summary or summary in notes:
+          continue
+        notes.append(summary)
+        if len(notes) >= 2:
+          break
+      return tuple(notes)
+
+    def _current_preflight_report(
+      self,
+      session: Optional[PlatformSession] = None,
+    ):
+      """Evaluate the current reviewed session against package and PIT truth."""
+
+      reviewed_session = session or self._base_session
+      return evaluate_preflight(
+        preflight_input_from_review_context(
+          reviewed_session,
+          package_assessment=self._base_package_assessment,
+          pit_inspection=self._base_pit_inspection,
+          pit_required=self._model.pit_required_for_safe_path,
+        )
+      )
+
+    def _synthesized_reviewed_session(
+      self,
+      warnings_acknowledged: bool = True,
+      destructive_acknowledged: bool = False,
+    ) -> PlatformSession:
+      """Rebuild one reviewed session snapshot from the current live/package/PIT truth."""
+
+      session = PlatformSession(
+        live_detection=self._base_session.live_detection,
+        inspection=self._base_session.inspection,
+      )
+      events = []
+      snapshot = session.live_detection.snapshot
+      if snapshot is not None:
+        payload = {
+          'device_id': snapshot.serial,
+          'mode': snapshot.connection_state,
+        }
+        product_code = snapshot.product_code or snapshot.model_name
+        if product_code is not None:
+          payload['product_code'] = product_code
+        events.append(
+          PlatformEvent(SessionEventType.DEVICE_CONNECTED, payload)
+        )
+      if self._base_package_assessment is not None:
+        package_payload = {
+          'package_id': self._base_package_assessment.display_package_id,
+        }
+        if self._base_package_assessment.risk_level is not None:
+          package_payload['risk_level'] = self._base_package_assessment.risk_level.value
+        events.append(
+          PlatformEvent(SessionEventType.PACKAGE_SELECTED, package_payload)
+        )
+      if events:
+        session = replay_events(events, initial=session)
+
+      report = self._current_preflight_report(session)
+      if session.guards.has_device and session.guards.package_loaded:
+        session = replay_events(
+          (PlatformEvent(SessionEventType.PREFLIGHT_REVIEW_STARTED),),
+          initial=session,
+        )
+        preflight_event = SessionEventType.PREFLIGHT_CLEARED
+        if report.gate == PreflightGate.BLOCKED:
+          preflight_event = SessionEventType.PREFLIGHT_BLOCKED
+        session = replay_events(
+          (
+            PlatformEvent(
+              preflight_event,
+              {'notes': self._preflight_notes_from_report(report)},
+            ),
+          ),
+          initial=session,
+        )
+        session = replace(
+          session,
+          guards=replace(
+            session.guards,
+            warnings_acknowledged=warnings_acknowledged,
+            destructive_acknowledged=(
+              destructive_acknowledged or not session.guards.operation_is_destructive
+            ),
+          ),
+        )
+        report = self._current_preflight_report(session)
+        if report.ready_for_execution:
+          session = replace(session, phase=SessionPhase.READY_TO_EXECUTE)
+      return session
+
+    def _sync_reviewed_session_state(self) -> None:
+      """Refresh the reviewed session phase/guards from the current GUI truth surfaces."""
+
+      self._base_session = self._synthesized_reviewed_session()
+      self._refresh_shell_view_model()
+
+    def _load_package_archive(self) -> None:
+      """Load one reviewed package archive through the bounded archive-intake contract."""
+
+      try:
+        default_root = str(Path.home())
+        selected_path, _selected_filter = QtWidgets.QFileDialog.getOpenFileName(
+          self,
+          'Load Calamum Vulcan package archive',
+          default_root,
+          'Package archives (*.zip)',
+        )
+        if not selected_path:
+          self._set_live_status('Package load cancelled.', 'warning')
+          return
+
+        archive_path = Path(selected_path)
+        detected_product_code = self._inspection_detected_product_code()
+        assessment = assess_package_archive(
+          archive_path,
+          detected_product_code=detected_product_code,
+        )
+        self._base_package_assessment = assessment
+        self._base_transport_trace = None
+        self._append_live_log_lines(
+          (
+            '[PACKAGE-LOAD] {path}'.format(path=archive_path),
+            '[PACKAGE-REVIEW] package={package_id} source={source} compatibility={compatibility} risk={risk}'.format(
+              package_id=assessment.display_package_id,
+              source=assessment.source_kind,
+              compatibility=assessment.compatibility_expectation.value,
+              risk=(assessment.risk_level.value if assessment.risk_level is not None else 'unknown'),
+            ),
+          )
+        )
+        self._sync_reviewed_session_state()
+        tone = 'success'
+        if (
+          assessment.contract_issues
+          or assessment.snapshot_issues
+          or assessment.analyzed_snapshot_drift_detected
+        ):
+          tone = 'warning'
+        self._set_live_status(
+          'Loaded package {package_id} from {name}. Review the Package Summary and Preflight Board before executing.'.format(
+            package_id=assessment.display_package_id,
+            name=archive_path.name,
+          ),
+          tone,
+        )
+      except PackageArchiveImportError as error:
+        self._append_live_log_lines(
+          ('[PACKAGE-ERROR] {error}'.format(error=error),)
+        )
+        self._set_live_status(
+          'Package archive review failed: {error}'.format(error=error),
+          'danger',
+        )
+      except Exception as error:  # pragma: no cover - defensive GUI guardrail
+        self._handle_live_action_exception('Load package', error)
+
+    def _confirm_execute_flash_plan(
+      self,
+      command_plan: HeimdallCommandPlan,
+      reviewed_flash_plan,
+      runtime_session: PlatformSession,
+    ) -> bool:
+      """Ask the operator to confirm the bounded delegated flash command."""
+
+      details = [
+        'This will start the bounded safe-path flash lane through delegated Heimdall transport.',
+        '',
+        command_plan.display_command,
+      ]
+      if self._base_package_assessment is not None:
+        details.append(
+          'package: {package_id}'.format(
+            package_id=self._base_package_assessment.display_package_id,
+          )
+        )
+        if self._base_package_assessment.risk_level is not None:
+          details.append(
+            'risk: {risk}'.format(
+              risk=self._base_package_assessment.risk_level.value,
+            )
+          )
+      details.append(
+        'reviewed phase: {phase}'.format(phase=runtime_session.phase.value)
+      )
+      details.append(
+        'partitions: {partitions}'.format(
+          partitions=', '.join(
+            '{name}<-{file_name}'.format(
+              name=partition.partition_name,
+              file_name=partition.file_name,
+            )
+            for partition in reviewed_flash_plan.partitions
+          ),
+        )
+      )
+      if reviewed_flash_plan.reboot_policy == 'no_reboot':
+        details.append(
+          'recovery handoff: manual recovery continuation will be required after the delegated flash lane pauses.'
+        )
+      for warning in reviewed_flash_plan.operator_warnings[:2]:
+        details.append('warning: {warning}'.format(warning=warning))
+      message = '\n'.join(details)
+
+      buttons = (
+        QtWidgets.QMessageBox.StandardButton.Yes
+        | QtWidgets.QMessageBox.StandardButton.No
+      )
+      default = QtWidgets.QMessageBox.StandardButton.No
+      if runtime_session.guards.operation_is_destructive:
+        result = QtWidgets.QMessageBox.warning(
+          self,
+          'Confirm bounded flash execution',
+          message,
+          buttons,
+          default,
+        )
+      else:
+        result = QtWidgets.QMessageBox.question(
+          self,
+          'Confirm bounded flash execution',
+          message,
+          buttons,
+          default,
+        )
+      return result == QtWidgets.QMessageBox.StandardButton.Yes
+
+    def _run_execute_flash_plan_workflow(self) -> None:
+      """Run the real bounded safe-path execute lane from the GUI control deck."""
+
+      try:
+        if self._base_package_assessment is None:
+          self._set_live_status(
+            'Load a reviewed package archive before executing the bounded flash lane.',
+            'warning',
+          )
+          return
+        reviewed_flash_plan = build_reviewed_flash_plan(self._base_package_assessment)
+        if not reviewed_flash_plan.ready_for_transport:
+          self._set_live_status(reviewed_flash_plan.summary, 'warning')
+          return
+
+        runtime_session = self._synthesized_reviewed_session(
+          warnings_acknowledged=True,
+          destructive_acknowledged=True,
+        )
+        ensure_safe_path_runtime_ready(
+          runtime_session,
+          package_assessment=self._base_package_assessment,
+          pit_inspection=self._base_pit_inspection,
+        )
+        command_plan = build_flash_command_plan_from_reviewed_plan(
+          reviewed_flash_plan
+        )
+        if not self._confirm_execute_flash_plan(
+          command_plan,
+          reviewed_flash_plan,
+          runtime_session,
+        ):
+          self._set_live_status('Bounded flash execution cancelled.', 'warning')
+          return
+
+        self._append_live_log_lines(
+          (
+            '[SAFE-PATH] reviewed session admitted to bounded delegated transport.',
+            '[SAFE-PATH-COMMAND] {command}'.format(
+              command=command_plan.display_command,
+            ),
+          )
+        )
+        self._start_heimdall_command(
+          command_plan,
+          'Executing bounded delegated Heimdall flash plan…',
+          lambda trace, runtime_session=runtime_session: (
+            self._apply_execute_flash_plan_trace(trace, runtime_session)
+          ),
+        )
+      except RuntimeSessionRejected as error:
+        self._append_live_log_lines(
+          ('[SAFE-PATH-BLOCK] {error}'.format(error=error),)
+        )
+        self._set_live_status(str(error), 'danger')
+      except Exception as error:  # pragma: no cover - defensive GUI guardrail
+        self._handle_live_action_exception('Execute flash plan', error)
+
+    def _apply_execute_flash_plan_trace(
+      self,
+      trace: HeimdallNormalizedTrace,
+      runtime_session: PlatformSession,
+    ) -> None:
+      """Apply one completed bounded flash trace to the GUI session surfaces."""
+
+      self._base_transport_trace = trace
+      self._base_session = replay_events(
+        trace.platform_events,
+        initial=runtime_session,
+      )
+      self._refresh_shell_view_model()
+      if trace.state == HeimdallTraceState.COMPLETED:
+        self._set_live_status(trace.summary, 'success')
+        return
+      if trace.state == HeimdallTraceState.RESUME_NEEDED:
+        self._set_live_status(
+          'Bounded flash lane paused for manual recovery. Complete the recorded step, then use Continue after recovery.',
+          'warning',
+        )
+        return
+      if trace.state == HeimdallTraceState.FAILED:
+        self._set_live_status(trace.summary, 'danger')
+        return
+      self._set_live_status(trace.summary, 'warning')
+
+    def _continue_after_recovery(self) -> None:
+      """Finalize one manual recovery handoff after the operator completes it."""
+
+      try:
+        if self._base_session.phase != SessionPhase.RESUME_NEEDED:
+          self._set_live_status(
+            'No manual recovery continuation is pending right now.',
+            'warning',
+          )
+          return
+
+        message = '\n'.join(
+          (
+            'Complete the recorded manual recovery step before continuing.',
+            '',
+            'Choose Yes only after the device has finished the required recovery handoff.',
+          )
+        )
+        result = QtWidgets.QMessageBox.question(
+          self,
+          'Confirm recovery continuation',
+          message,
+          QtWidgets.QMessageBox.StandardButton.Yes
+          | QtWidgets.QMessageBox.StandardButton.No,
+          QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if result != QtWidgets.QMessageBox.StandardButton.Yes:
+          self._set_live_status('Recovery continuation cancelled.', 'warning')
+          return
+
+        self._base_session = replay_events(
+          (
+            PlatformEvent(SessionEventType.EXECUTION_RESUMED),
+            PlatformEvent(SessionEventType.EXECUTION_COMPLETED),
+          ),
+          initial=self._base_session,
+        )
+        if self._base_transport_trace is not None:
+          self._base_transport_trace = replace(
+            self._base_transport_trace,
+            state=HeimdallTraceState.COMPLETED,
+            summary=(
+              'Manual recovery continuation was recorded in the GUI, and the bounded safe-path handoff is now finalized for evidence export.'
+            ),
+            notes=self._base_transport_trace.notes + (
+              'Manual recovery continuation recorded through the GUI Continue after recovery control.',
+            ),
+          )
+        self._append_live_log_lines(
+          (
+            '[SAFE-PATH] Manual recovery continuation recorded.',
+            '[SAFE-PATH] Bounded handoff finalized for evidence export.',
+          )
+        )
+        self._refresh_shell_view_model()
+        self._set_live_status(
+          'Manual recovery continuation recorded. Export evidence next.',
+          'success',
+        )
+      except TransitionRejected as error:
+        self._append_live_log_lines(
+          ('[SAFE-PATH-BLOCK] {error}'.format(error=error),)
+        )
+        self._set_live_status(str(error), 'danger')
+      except Exception as error:  # pragma: no cover - defensive GUI guardrail
+        self._handle_live_action_exception('Continue after recovery', error)
 
     def _export_evidence_report(self) -> None:
       """Export the current evidence bundle to a Markdown or JSON file."""
@@ -1978,26 +3022,64 @@ else:
           ),
           source_labels=('adb', 'fastboot'),
         )
-      else:
-        detection = build_live_detection_session(
-          trace,
-          fallback_posture=LiveFallbackPosture.ENGAGED,
-          fallback_reason=(
-            'ADB did not establish a live device; fastboot fallback also failed to capture a live companion.'
-          ),
-          source_labels=('adb', 'fastboot'),
-        )
+        self._set_live_detection(detection)
+        self._live_adb_serial = None
+        self._live_adb_identity = 'ADB: --'
+        if detection.snapshot is not None:
+          self._live_fastboot_serial = detection.snapshot.serial
+          self._live_fastboot_identity = 'Fastboot: {identity}'.format(
+            identity=self._live_identity_text(detection.snapshot),
+          )
+        else:
+          self._live_fastboot_serial = None
+          self._live_fastboot_identity = 'Fastboot: --'
+        self._refresh_live_controls()
+        self._continue_inspection_to_pit_review()
+        return
+
+      detection = build_live_detection_session(
+        trace,
+        fallback_posture=LiveFallbackPosture.ENGAGED,
+        fallback_reason=(
+          'ADB did not establish a live device; fastboot fallback also failed to capture a live companion.'
+        ),
+        source_labels=('adb', 'fastboot'),
+      )
       self._set_live_detection(detection)
       self._live_adb_serial = None
       self._live_adb_identity = 'ADB: --'
-      if detection.snapshot is not None:
-        self._live_fastboot_serial = detection.snapshot.serial
-        self._live_fastboot_identity = 'Fastboot: {identity}'.format(
-          identity=self._live_identity_text(detection.snapshot),
+      self._live_fastboot_serial = None
+      self._live_fastboot_identity = 'Fastboot: --'
+      self._refresh_live_controls()
+      pending_text = (
+        'Inspect-only: ADB and fastboot found no live device. Checking Samsung download mode via Heimdall…'
+      )
+      if trace.state == AndroidToolsTraceState.FAILED:
+        pending_text = (
+          'Inspect-only: fastboot probe failed after ADB missed the device. Checking Samsung download mode via Heimdall…'
         )
-      else:
-        self._live_fastboot_serial = None
-        self._live_fastboot_identity = 'Fastboot: --'
+      self._start_heimdall_command(
+        build_detect_device_command_plan(),
+        pending_text,
+        self._apply_inspection_heimdall_detection_trace,
+      )
+
+    def _apply_inspection_heimdall_detection_trace(
+      self,
+      trace: HeimdallNormalizedTrace,
+    ) -> None:
+      """Continue the inspect-only lane after Heimdall download-mode detection."""
+
+      detection = build_heimdall_live_detection_session(
+        trace,
+        source_labels=('adb', 'fastboot', 'heimdall'),
+        treat_missing_device_as_cleared=True,
+      )
+      self._set_live_detection(detection)
+      self._live_adb_serial = None
+      self._live_adb_identity = 'ADB: --'
+      self._live_fastboot_serial = None
+      self._live_fastboot_identity = 'Fastboot: --'
       self._refresh_live_controls()
       self._continue_inspection_to_pit_review()
 
@@ -2122,9 +3204,12 @@ else:
         transport_trace=self._base_transport_trace,
         boot_unhydrated=self._boot_unhydrated,
         device_surface_cleared=self._device_surface_cleared,
+        pit_required_for_safe_path=self._model.pit_required_for_safe_path,
       )
       self._panel_titles = tuple(panel.title for panel in self._model.panels)
-      self._action_labels = tuple(action.label for action in self._model.control_actions)
+      self._action_labels = tuple(
+        action.label for action in self._model.control_actions if action.visible
+      )
       self.setWindowTitle(
         'Calamum Vulcan — {phase}'.format(phase=self._model.phase_label)
       )
@@ -2133,6 +3218,8 @@ else:
     def _set_live_detection(self, live_detection) -> None:
       """Persist repo-owned live detection into the immutable session snapshot."""
 
+      if live_detection.snapshot is not None:
+        self._cancel_pending_disconnect_clear()
       self._base_session = replace(
         self._base_session,
         live_detection=live_detection,
@@ -2141,7 +3228,7 @@ else:
         live_detection.state == LiveDetectionState.CLEARED
         and live_detection.snapshot is None
       )
-      self._refresh_shell_view_model()
+      self._sync_reviewed_session_state()
 
     def _live_identity_text(self, snapshot: LiveDeviceSnapshot) -> str:
       """Return one compact device identity string for live labels."""
@@ -2206,10 +3293,7 @@ else:
           'warning',
         )
       else:
-        self._live_adb_serial = None
-        self._live_adb_identity = 'ADB: --'
-        self._live_fastboot_serial = None
-        self._live_fastboot_identity = 'Fastboot: --'
+        self._clear_live_identity_labels()
         tone = 'neutral' if detection.state == LiveDetectionState.CLEARED else 'danger'
         self._set_live_status(
           '{summary} No live ADB companion detected.'.format(
@@ -2314,8 +3398,7 @@ else:
           'success' if detection.snapshot.command_ready else 'warning',
         )
       else:
-        self._live_fastboot_serial = None
-        self._live_fastboot_identity = 'Fastboot: --'
+        self._clear_live_identity_labels()
         tone = 'neutral' if detection.state == LiveDetectionState.CLEARED else 'danger'
         self._set_live_status(
           '{summary} No live fastboot companion detected.'.format(
@@ -2344,9 +3427,7 @@ else:
         source_labels=('adb', 'fastboot'),
       )
       self._set_live_detection(detection)
-      self._live_adb_serial = None
-      self._live_fastboot_serial = None
-      self._live_fastboot_identity = 'Fastboot: --'
+      self._clear_live_identity_labels()
       if trace.state == AndroidToolsTraceState.FAILED:
         self._live_adb_identity = 'ADB: probe failed; checking fastboot.'
         pending_text = 'ADB probe failed. Checking fastboot…'
@@ -2386,21 +3467,52 @@ else:
         source_labels=('adb', 'fastboot'),
       )
       self._set_live_detection(detection)
-      self._live_adb_serial = None
-      self._live_adb_identity = 'ADB: --'
-      self._live_fastboot_serial = None
+      self._clear_live_identity_labels()
+      self._refresh_live_controls()
+      pending_text = (
+        'ADB and fastboot did not find a live device. Checking Samsung download mode via Heimdall…'
+      )
       if trace.state == AndroidToolsTraceState.FAILED:
-        self._live_fastboot_identity = 'Fastboot: probe failed.'
+        pending_text = (
+          'ADB did not identify a live device, and the fastboot probe failed. Checking Samsung download mode via Heimdall…'
+        )
+      self._start_heimdall_command(
+        build_detect_device_command_plan(),
+        pending_text,
+        self._apply_unified_heimdall_detection_trace,
+      )
+
+    def _apply_unified_heimdall_detection_trace(
+      self,
+      trace: HeimdallNormalizedTrace,
+    ) -> None:
+      """Apply the unified detect flow after the Heimdall download-mode probe."""
+
+      detection = build_heimdall_live_detection_session(
+        trace,
+        source_labels=('adb', 'fastboot', 'heimdall'),
+        treat_missing_device_as_cleared=True,
+      )
+      self._set_live_detection(detection)
+      self._clear_live_identity_labels()
+      if detection.snapshot is not None:
         self._set_live_status(
-          'ADB did not identify a live device, and the fastboot probe failed.',
-          'danger',
+          '{summary} Active companion: {identity} via Heimdall.'.format(
+            summary=detection.summary,
+            identity=self._live_identity_text(detection.snapshot),
+          ),
+          (
+            'success'
+            if (
+              detection.snapshot.command_ready
+              and detection.state != LiveDetectionState.ATTENTION
+            )
+            else 'warning'
+          ),
         )
       else:
-        self._live_fastboot_identity = 'Fastboot: --'
-        self._set_live_status(
-          'No live device detected after checking ADB and fastboot.',
-          'neutral',
-        )
+        tone = 'neutral' if detection.state == LiveDetectionState.CLEARED else 'danger'
+        self._set_live_status(detection.summary, tone)
       self._refresh_live_controls()
 
     def _handle_adb_reboot(self) -> None:
@@ -2543,10 +3655,16 @@ else:
       retained_threads = [
         retained[0] for retained in self._retained_live_command_objects
       ] + [
+        retained[0] for retained in self._retained_heimdall_command_objects
+      ] + [
+        retained[0] for retained in self._retained_disconnect_monitor_objects
+      ] + [
         retained[0] for retained in self._retained_pit_command_objects
       ]
       for thread in retained_threads + [
         self._live_command_thread,
+        self._heimdall_command_thread,
+        self._disconnect_monitor_thread,
         self._pit_command_thread,
       ]:
         if thread is None:
@@ -2561,10 +3679,45 @@ else:
           continue
       return False
 
+    def _qt_worker_teardown_pending(self) -> bool:
+      """Return whether a real Qt worker thread is still retained for teardown."""
+
+      retained_threads = [
+        retained[0] for retained in self._retained_live_command_objects
+      ] + [
+        retained[0] for retained in self._retained_heimdall_command_objects
+      ] + [
+        retained[0] for retained in self._retained_disconnect_monitor_objects
+      ] + [
+        retained[0] for retained in self._retained_pit_command_objects
+      ]
+      for thread in retained_threads + [
+        self._live_command_thread,
+        self._heimdall_command_thread,
+        self._disconnect_monitor_thread,
+        self._pit_command_thread,
+      ]:
+        if isinstance(thread, QtCore.QThread):
+          return True
+      return False
+
+    def _complete_pending_close_after_worker_teardown(self) -> None:
+      """Finish one close request that was blocked only by deferred Qt teardown."""
+
+      if not self._pending_close_after_worker_teardown:
+        return
+      if self._live_command_thread_running():
+        return
+      if self._qt_worker_teardown_pending():
+        return
+      self._pending_close_after_worker_teardown = False
+      QtCore.QTimer.singleShot(0, self.close)
+
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
       """Restore any temporary busy cursor state before the window closes."""
 
       if self._live_command_thread_running():
+        self._pending_close_after_worker_teardown = False
         message = (
           'Wait for the current live companion action to finish before closing the GUI.'
         )
@@ -2574,6 +3727,27 @@ else:
         self._set_live_status(message, 'warning')
         event.ignore()
         return
+      if self._qt_worker_teardown_pending():
+        application = QtWidgets.QApplication.instance()
+        if application is not None:
+          for _attempt in range(4):
+            if not self._qt_worker_teardown_pending():
+              break
+            application.processEvents()
+      if self._qt_worker_teardown_pending():
+        self._pending_close_after_worker_teardown = False
+        message = (
+          'Wait for the current live companion action to finish before closing the GUI.'
+        )
+        self._append_live_log_lines(
+          ('[COMPANION-WAIT] {message}'.format(message=message),)
+        )
+        self._set_live_status(message, 'warning')
+        event.ignore()
+        return
+      self._pending_close_after_worker_teardown = False
+      self._disconnect_monitor_timer.stop()
+      self._cancel_pending_disconnect_clear()
       if self._wait_cursor_active:
         application = QtWidgets.QApplication.instance()
         if application is not None:
@@ -2620,6 +3794,118 @@ else:
       for note in trace.notes:
         lines.append('[COMPANION-NOTE] {note}'.format(note=note))
       return tuple(lines)
+
+    def _render_heimdall_trace_lines(
+      self,
+      trace: HeimdallNormalizedTrace,
+    ) -> Tuple[str, ...]:
+      """Render one Heimdall detect trace into operational-log lines."""
+
+      lines = [
+        '[COMPANION] {command}'.format(
+          command=trace.command_plan.display_command,
+        ),
+        '[COMPANION-RESULT] backend=heimdall state={state} exit={exit_code} summary={summary}'.format(
+          state=trace.state.value,
+          exit_code=trace.exit_code,
+          summary=trace.summary,
+        ),
+      ]
+      for event in trace.platform_events:
+        payload = getattr(event, 'payload', None)
+        if payload is None or not hasattr(payload, 'get'):
+          continue
+        lines.append(
+          '[COMPANION-DEVICE] serial={serial} state={state} transport={transport} product={product} model={model}'.format(
+            serial=payload.get('device_id', 'unknown'),
+            state=payload.get('mode', 'unknown'),
+            transport='download-mode',
+            product=payload.get('product_code', 'unknown'),
+            model='unknown',
+          )
+        )
+        break
+      for note in trace.notes[:2]:
+        lines.append('[COMPANION-NOTE] {note}'.format(note=note))
+      return tuple(lines)
+
+    def _archive_heimdall_detect_diagnostic(
+      self,
+      trace: HeimdallNormalizedTrace,
+    ) -> Optional[Path]:
+      """Archive raw Heimdall detect output when normalization misses a trusted shape."""
+
+      if trace.command_plan.operation != HeimdallOperation.DETECT:
+        return None
+      if getattr(trace.state, 'value', str(trace.state)) != 'failed':
+        return None
+      summary = trace.summary.lower()
+      if 'did not detect a samsung download-mode device' in summary:
+        return None
+      if (
+        'normalize a trustworthy samsung download-mode identity' not in summary
+        and 'failed before the platform could verify samsung download-mode presence' not in summary
+      ):
+        return None
+      details = [
+        'command={command}'.format(command=trace.command_plan.display_command),
+        'summary={summary}'.format(summary=trace.summary),
+        'exit_code={exit_code}'.format(exit_code=trace.exit_code),
+      ]
+      for note in trace.notes:
+        details.append('note={note}'.format(note=note))
+      details.append('stdout:')
+      if trace.stdout_lines:
+        details.extend('  ' + line for line in trace.stdout_lines)
+      else:
+        details.append('  (none)')
+      details.append('stderr:')
+      if trace.stderr_lines:
+        details.extend('  ' + line for line in trace.stderr_lines)
+      else:
+        details.append('  (none)')
+      return _write_gui_runtime_diagnostic(
+        'Heimdall detect normalization miss',
+        details=tuple(details),
+      )
+
+    def _current_download_mode_snapshot(self) -> Optional[LiveDeviceSnapshot]:
+      """Return the active Heimdall download-mode snapshot when one is present."""
+
+      snapshot = self._base_session.live_detection.snapshot
+      if snapshot is None:
+        return None
+      if snapshot.source.value != 'heimdall' or not snapshot.command_ready:
+        return None
+      return snapshot
+
+    def _pit_status_tone(
+      self,
+      pit_inspection: Optional[PitInspection],
+    ) -> str:
+      """Return the operator tone for the current PIT review result."""
+
+      if pit_inspection is None:
+        return 'warning'
+      if pit_inspection.state in (
+        PitInspectionState.FAILED,
+        PitInspectionState.MALFORMED,
+      ):
+        return 'danger'
+      if pit_inspection.device_alignment == PitDeviceAlignment.MISMATCHED:
+        return 'danger'
+      if pit_inspection.package_alignment == PitPackageAlignment.MISMATCHED:
+        return 'danger'
+      if pit_inspection.state == PitInspectionState.PARTIAL:
+        return 'warning'
+      if pit_inspection.device_alignment == PitDeviceAlignment.NOT_PROVIDED:
+        return 'warning'
+      if pit_inspection.package_alignment in (
+        PitPackageAlignment.MISSING_REVIEWED,
+        PitPackageAlignment.MISSING_OBSERVED,
+      ):
+        return 'warning'
+      return 'success'
 
     def _render_pit_trace_lines(
       self,
@@ -2670,7 +3956,10 @@ else:
     try:
       window = ShellWindow(model)
       watchdog.mark('window_constructed')
-      window.show()
+      if _should_launch_maximized(duration_ms):
+        window.showMaximized()
+      else:
+        window.show()
       watchdog.mark('window_shown')
       heartbeat_timer.start()
       if duration_ms > 0:

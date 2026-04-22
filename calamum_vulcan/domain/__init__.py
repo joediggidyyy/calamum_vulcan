@@ -7,5 +7,6 @@ __all__ = [
 	'pit',
 	'preflight',
 	'reporting',
+	'safe_path',
 	'state',
 ]

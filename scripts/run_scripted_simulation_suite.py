@@ -114,6 +114,46 @@ SCENARIO_MATRIX = (
   },
 )
 SCENARIO_NAMES = tuple(scenario['name'] for scenario in SCENARIO_MATRIX)
+EXECUTE_MATRIX = (
+  {
+    'name': 'ready-execute',
+    'cli_args': (
+      '--execute-flash-plan',
+      '--transport-source', 'heimdall-adapter',
+      '--scenario', 'ready',
+      '--control-format', 'json',
+    ),
+    'expected_result': {
+      'execution_allowed': True,
+      'transport_state': 'completed',
+      'ownership': 'delegated',
+    },
+    'expected_evidence': {
+      'session_phase': 'completed',
+      'transport_state': 'completed',
+      'outcome': 'completed',
+    },
+  },
+  {
+    'name': 'blocked-execute',
+    'cli_args': (
+      '--execute-flash-plan',
+      '--transport-source', 'heimdall-adapter',
+      '--scenario', 'blocked',
+      '--control-format', 'json',
+    ),
+    'expected_result': {
+      'execution_allowed': False,
+      'transport_state': 'not_invoked',
+      'ownership': 'blocked',
+    },
+    'expected_evidence': {
+      'session_phase': 'validation_blocked',
+      'transport_state': 'not_invoked',
+      'outcome': 'validation_blocked',
+    },
+  },
+)
 
 
 def _print(lines: Sequence[str]) -> None:
@@ -224,6 +264,22 @@ def _assert_markdown_payload(markdown: str, scenario_name: str) -> None:
     raise SystemExit('Markdown evidence is missing expected sections.')
   if scenario_name not in markdown:
     raise SystemExit('Markdown evidence is missing the scenario label.')
+
+
+def _assert_execute_result_payload(
+  payload: Mapping[str, object],
+  expected: Mapping[str, object],
+) -> None:
+  if payload['execution_allowed'] != expected['execution_allowed']:
+    raise SystemExit('Unexpected execute-lane execution_allowed value.')
+  if payload['transport']['state'] != expected['transport_state']:
+    raise SystemExit('Unexpected execute-lane transport state: {state}'.format(
+      state=payload['transport']['state'],
+    ))
+  if payload['authority']['ownership'] != expected['ownership']:
+    raise SystemExit('Unexpected execute-lane authority ownership: {ownership}'.format(
+      ownership=payload['authority']['ownership'],
+    ))
 
 
 def _scenario_output_paths(context_root: Path, scenario_name: str) -> Dict[str, Path]:
@@ -353,53 +409,163 @@ def _run_bundle_context(
   command_factory,
   execution_cwd: Path,
 ) -> Dict[str, object]:
-  bundle_json_path = context_root / 'sprint_close_bundle.json'
-  bundle_markdown_path = context_root / 'sprint_close_bundle.md'
   captured_at = FIXED_CAPTURED_AT_UTC
-
-  _run(
-    command_factory(
-      [
-        '--integration-suite', 'sprint-close',
-        '--suite-format', 'json',
-        '--suite-output', str(bundle_json_path),
-        '--captured-at-utc', captured_at,
-      ]
-    ),
-    cwd=execution_cwd,
+  bundle_specs = (
+    {
+      'suite_name': 'sprint-close',
+      'json_path': context_root / 'sprint_close_bundle.json',
+      'markdown_path': context_root / 'sprint_close_bundle.md',
+      'heading': 'Calamum Vulcan FS-08 sprint-close bundle',
+      'scenario_count': 6,
+    },
+    {
+      'suite_name': 'safe-path-close',
+      'json_path': context_root / 'safe_path_close_bundle.json',
+      'markdown_path': context_root / 'safe_path_close_bundle.md',
+      'heading': 'Calamum Vulcan FS4-07 safe-path-close bundle',
+      'scenario_count': 6,
+    },
   )
-  _run(
-    command_factory(
-      [
-        '--integration-suite', 'sprint-close',
-        '--suite-format', 'markdown',
-        '--suite-output', str(bundle_markdown_path),
-        '--captured-at-utc', captured_at,
-      ]
-    ),
-    cwd=execution_cwd,
-  )
+  results = {}
 
-  bundle_json = _read_json(bundle_json_path)
-  bundle_markdown = _read_text(bundle_markdown_path)
-  if bundle_json['suite_name'] != 'sprint-close':
-    raise SystemExit('Integrated bundle lost the expected suite name.')
-  if len(bundle_json['scenarios']) != 6:
-    raise SystemExit('Integrated bundle returned the wrong scenario count.')
-  if 'Calamum Vulcan FS-08 sprint-close bundle' not in bundle_markdown:
-    raise SystemExit('Integrated Markdown bundle is missing the expected heading.')
-  return {
-    'json': bundle_json,
-    'markdown': bundle_markdown,
-  }
+  for bundle_spec in bundle_specs:
+    _run(
+      command_factory(
+        [
+          '--integration-suite', bundle_spec['suite_name'],
+          '--suite-format', 'json',
+          '--suite-output', str(bundle_spec['json_path']),
+          '--captured-at-utc', captured_at,
+        ]
+      ),
+      cwd=execution_cwd,
+    )
+    _run(
+      command_factory(
+        [
+          '--integration-suite', bundle_spec['suite_name'],
+          '--suite-format', 'markdown',
+          '--suite-output', str(bundle_spec['markdown_path']),
+          '--captured-at-utc', captured_at,
+        ]
+      ),
+      cwd=execution_cwd,
+    )
+
+    bundle_json = _read_json(bundle_spec['json_path'])
+    bundle_markdown = _read_text(bundle_spec['markdown_path'])
+    if bundle_json['suite_name'] != bundle_spec['suite_name']:
+      raise SystemExit(
+        'Integrated bundle lost the expected suite name for {suite_name}.'.format(
+          suite_name=bundle_spec['suite_name'],
+        )
+      )
+    if len(bundle_json['scenarios']) != bundle_spec['scenario_count']:
+      raise SystemExit(
+        'Integrated bundle returned the wrong scenario count for {suite_name}.'.format(
+          suite_name=bundle_spec['suite_name'],
+        )
+      )
+    if bundle_spec['heading'] not in bundle_markdown:
+      raise SystemExit(
+        'Integrated Markdown bundle is missing the expected heading for {suite_name}.'.format(
+          suite_name=bundle_spec['suite_name'],
+        )
+      )
+    results[bundle_spec['suite_name']] = {
+      'json': bundle_json,
+      'markdown': bundle_markdown,
+    }
+
+  return results
+
+
+def _run_execute_context(
+  context_name: str,
+  context_root: Path,
+  execute_matrix: Sequence[Mapping[str, object]],
+  command_factory,
+  execution_cwd: Path,
+  progress_path: Path,
+) -> Dict[str, Dict[str, object]]:
+  results = {}
+
+  for index, execute_case in enumerate(execute_matrix):
+    _append_progress(
+      progress_path,
+      '[{context}] start execute {scenario}'.format(
+        context=context_name,
+        scenario=execute_case['name'],
+      ),
+    )
+    case_root = context_root / execute_case['name']
+    case_root.mkdir(parents=True, exist_ok=True)
+    captured_at = '2026-04-18T23:{minute:02d}:30Z'.format(minute=30 + index)
+
+    result = _run(
+      command_factory(list(execute_case['cli_args']) + ['--captured-at-utc', captured_at]),
+      cwd=execution_cwd,
+    )
+    result_payload = json.loads(result.stdout)
+    _assert_execute_result_payload(
+      result_payload,
+      execute_case['expected_result'],
+    )
+    (case_root / 'execute_result.json').write_text(
+      json.dumps(result_payload, indent=2, sort_keys=True) + '\n',
+      encoding='utf-8',
+    )
+
+    evidence_path = case_root / 'execute_evidence.json'
+    _run(
+      command_factory(
+        list(execute_case['cli_args']) + [
+          '--export-evidence',
+          '--evidence-format', 'json',
+          '--evidence-output', str(evidence_path),
+          '--captured-at-utc', captured_at,
+        ]
+      ),
+      cwd=execution_cwd,
+    )
+    evidence_payload = _read_json(evidence_path)
+    expected_evidence = execute_case['expected_evidence']
+    if evidence_payload['session_phase'] != expected_evidence['session_phase']:
+      raise SystemExit('Unexpected execute-lane session phase for {scenario}.'.format(
+        scenario=execute_case['name'],
+      ))
+    if evidence_payload['transport']['state'] != expected_evidence['transport_state']:
+      raise SystemExit('Unexpected execute-lane evidence transport state for {scenario}.'.format(
+        scenario=execute_case['name'],
+      ))
+    if evidence_payload['outcome']['outcome'] != expected_evidence['outcome']:
+      raise SystemExit('Unexpected execute-lane outcome for {scenario}.'.format(
+        scenario=execute_case['name'],
+      ))
+
+    results[execute_case['name']] = {
+      'result': result_payload,
+      'evidence': evidence_payload,
+    }
+    _append_progress(
+      progress_path,
+      '[{context}] completed execute {scenario}'.format(
+        context=context_name,
+        scenario=execute_case['name'],
+      ),
+    )
+
+  return results
 
 
 def _compare_contexts(
   selected_scenarios: Sequence[Mapping[str, object]],
   source_results: Mapping[str, Dict[str, object]],
   installed_results: Mapping[str, Dict[str, object]],
-  source_bundle: Mapping[str, object],
-  installed_bundle: Mapping[str, object],
+  source_execute_results: Mapping[str, Dict[str, object]],
+  installed_execute_results: Mapping[str, Dict[str, object]],
+  source_bundle: Mapping[str, Mapping[str, object]],
+  installed_bundle: Mapping[str, Mapping[str, object]],
 ) -> None:
   for scenario in selected_scenarios:
     name = scenario['name']
@@ -409,10 +575,25 @@ def _compare_contexts(
       raise SystemExit('JSON evidence drifted between source and installed contexts for {name}.'.format(name=name))
     if source_results[name]['markdown'] != installed_results[name]['markdown']:
       raise SystemExit('Markdown evidence drifted between source and installed contexts for {name}.'.format(name=name))
-  if source_bundle['json'] != installed_bundle['json']:
-    raise SystemExit('Sprint-close JSON bundle drifted between source and installed contexts.')
-  if source_bundle['markdown'] != installed_bundle['markdown']:
-    raise SystemExit('Sprint-close Markdown bundle drifted between source and installed contexts.')
+  for suite_name in source_bundle:
+    if source_bundle[suite_name]['json'] != installed_bundle[suite_name]['json']:
+      raise SystemExit(
+        '{suite_name} JSON bundle drifted between source and installed contexts.'.format(
+          suite_name=suite_name,
+        )
+      )
+    if source_bundle[suite_name]['markdown'] != installed_bundle[suite_name]['markdown']:
+      raise SystemExit(
+        '{suite_name} Markdown bundle drifted between source and installed contexts.'.format(
+          suite_name=suite_name,
+        )
+      )
+  for execute_case in EXECUTE_MATRIX:
+    name = execute_case['name']
+    if source_execute_results[name]['result'] != installed_execute_results[name]['result']:
+      raise SystemExit('Execute-lane result drifted between source and installed contexts for {name}.'.format(name=name))
+    if source_execute_results[name]['evidence'] != installed_execute_results[name]['evidence']:
+      raise SystemExit('Execute-lane evidence drifted between source and installed contexts for {name}.'.format(name=name))
 
 
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -434,7 +615,7 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
   parser.add_argument(
     '--skip-bundle',
     action='store_true',
-    help='Skip the sprint-close bundle generation checks.',
+    help='Skip the closeout bundle generation checks.',
   )
   return parser.parse_args(argv)
 
@@ -483,6 +664,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     progress_path,
   )
   installed_results = {}
+  source_execute_results = _run_execute_context(
+    'source_root',
+    source_archive_root,
+    EXECUTE_MATRIX,
+    _source_command,
+    REPO_ROOT,
+    progress_path,
+  )
+  installed_execute_results = {}
   if not args.skip_installed:
     installed_results = _run_scenario_context(
       'installed_artifact',
@@ -492,29 +682,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
       installed_workdir,
       progress_path,
     )
+    installed_execute_results = _run_execute_context(
+      'installed_artifact',
+      installed_archive_root,
+      EXECUTE_MATRIX,
+      lambda extra_args: _installed_command(install_root, extra_args),
+      installed_workdir,
+      progress_path,
+    )
 
-  source_bundle = {'json': {}, 'markdown': ''}
-  installed_bundle = {'json': {}, 'markdown': ''}
+  source_bundle = {}
+  installed_bundle = {}
   if not args.skip_bundle:
     source_bundle = _run_bundle_context(
       source_archive_root,
       _source_command,
       REPO_ROOT,
     )
-    _append_progress(progress_path, '[source_root] completed sprint-close bundle')
+    _append_progress(progress_path, '[source_root] completed closeout bundles')
     if not args.skip_installed:
       installed_bundle = _run_bundle_context(
         installed_archive_root,
         lambda extra_args: _installed_command(install_root, extra_args),
         installed_workdir,
       )
-      _append_progress(progress_path, '[installed_artifact] completed sprint-close bundle')
+      _append_progress(progress_path, '[installed_artifact] completed closeout bundles')
 
   if not args.skip_installed:
     _compare_contexts(
       selected_scenarios,
       source_results,
       installed_results,
+      source_execute_results,
+      installed_execute_results,
       source_bundle,
       installed_bundle,
     )
@@ -523,9 +723,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
   summary = {
     'captured_at_utc': FIXED_CAPTURED_AT_UTC,
     'scenario_names': [scenario['name'] for scenario in selected_scenarios],
+    'execute_names': [execute_case['name'] for execute_case in EXECUTE_MATRIX],
     'source_archive_root': str(source_archive_root),
     'installed_archive_root': str(installed_archive_root),
-    'bundle_id': source_bundle['json'].get('bundle_id'),
+    'bundle_ids': {
+      suite_name: suite_payload['json'].get('bundle_id')
+      for suite_name, suite_payload in source_bundle.items()
+    },
   }
   summary_path = ARCHIVE_ROOT / 'simulation_summary.json'
   security_summary = run_security_validation_suite(REPO_ROOT)
@@ -546,6 +750,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
       'installed_artifact_runner="passed"',
       'offscreen_gui="passed"',
       'evidence_exports="passed"',
+      'safe_path_execute="passed"',
       'integration_bundle="passed"',
       'reproducibility_contract="passed"',
       'scripted_simulation_contract="passed"',

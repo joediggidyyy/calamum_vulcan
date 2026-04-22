@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Dict
 from typing import List
 from typing import Optional
 from typing import Tuple
@@ -358,7 +359,7 @@ def _summary_for_print_capture(
   elif package_alignment == PitPackageAlignment.MISSING_REVIEWED:
     summary += ' Reviewed package truth does not yet provide a usable PIT fingerprint for comparison.'
   elif package_alignment == PitPackageAlignment.MISSING_OBSERVED:
-    summary += ' Observed PIT output did not provide a usable fingerprint for comparison.'
+    summary += ' Observed PIT output did not provide a usable PIT fingerprint for comparison.'
   if _device_alignment(observed_product_code, detected_product_code) == PitDeviceAlignment.MISMATCHED:
     summary += ' Observed PIT product code does not match the current session device identity.'
   return summary
@@ -436,7 +437,7 @@ def _operator_guidance(
   elif package_alignment == PitPackageAlignment.MISSING_REVIEWED:
     guidance.append('Reviewed package truth does not yet provide a usable PIT fingerprint for comparison.')
   elif package_alignment == PitPackageAlignment.MISSING_OBSERVED:
-    guidance.append('Observed PIT output did not provide a usable fingerprint for comparison.')
+    guidance.append('Observed PIT output did not provide a usable PIT fingerprint for comparison.')
 
   if device_alignment == PitDeviceAlignment.MISMATCHED:
     guidance.append('Observed PIT product code does not match the current session device identity.')
@@ -489,3 +490,19 @@ def _dedupe_strings(values: List[str]) -> Tuple[str, ...]:
     if value not in deduped:
       deduped.append(value)
   return tuple(deduped)
+
+
+def preflight_overrides_from_pit_inspection(
+  inspection: PitInspection,
+) -> Dict[str, object]:
+  """Convert PIT inspection truth into preflight-rule overrides."""
+
+  return {
+    'pit_state': inspection.state.value,
+    'pit_summary': inspection.summary,
+    'pit_package_alignment': inspection.package_alignment.value,
+    'pit_device_alignment': inspection.device_alignment.value,
+    'pit_observed_product_code': (
+      inspection.canonical_product_code or inspection.observed_product_code
+    ),
+  }

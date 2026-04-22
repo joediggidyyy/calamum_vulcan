@@ -159,6 +159,104 @@ class PreflightRuleTests(unittest.TestCase):
       )
     )
 
+  def test_pit_package_mismatch_blocks_the_gate(self) -> None:
+    report = evaluate_preflight(
+      PreflightInput(
+        device_present=True,
+        in_download_mode=True,
+        package_selected=True,
+        package_complete=True,
+        checksums_present=True,
+        device_registry_known=True,
+        product_code='SM-G991U',
+        canonical_product_code='SM-G991U',
+        device_marketing_name='Galaxy S21',
+        product_code_match=True,
+        warnings_acknowledged=True,
+        battery_level=72,
+        package_id='regional-match-demo',
+        pit_state='captured',
+        pit_summary='Repo-owned PIT inspection captured alignment truth.',
+        pit_package_alignment='mismatched',
+        pit_device_alignment='matched',
+        pit_observed_product_code='SM-G991U',
+      )
+    )
+
+    self.assertEqual(report.gate, PreflightGate.BLOCKED)
+    self.assertFalse(report.ready_for_execution)
+    self.assertTrue(
+      any(
+        signal.rule_id == 'pit_package_alignment'
+        and signal.severity == PreflightSeverity.BLOCK
+        for signal in report.signals
+      )
+    )
+
+  def test_acknowledged_partial_pit_truth_keeps_gate_ready(self) -> None:
+    report = evaluate_preflight(
+      PreflightInput(
+        device_present=True,
+        in_download_mode=True,
+        package_selected=True,
+        package_complete=True,
+        checksums_present=True,
+        device_registry_known=True,
+        product_code='SM-G991U',
+        canonical_product_code='SM-G991U',
+        device_marketing_name='Galaxy S21',
+        product_code_match=True,
+        warnings_acknowledged=True,
+        battery_level=72,
+        package_id='regional-match-demo',
+        pit_state='partial',
+        pit_summary='PIT acquisition metadata was captured, but detailed partition inspection still requires print-pit output.',
+        pit_package_alignment='matched',
+        pit_device_alignment='matched',
+        pit_observed_product_code='SM-G991U',
+      )
+    )
+
+    self.assertEqual(report.gate, PreflightGate.READY)
+    self.assertTrue(report.ready_for_execution)
+    self.assertTrue(
+      any(
+        signal.rule_id == 'pit_state'
+        and signal.severity == PreflightSeverity.WARN
+        for signal in report.signals
+      )
+    )
+
+  def test_pit_required_blocks_safe_path_when_review_truth_is_missing(self) -> None:
+    report = evaluate_preflight(
+      PreflightInput(
+        device_present=True,
+        in_download_mode=True,
+        package_selected=True,
+        package_complete=True,
+        checksums_present=True,
+        device_registry_known=True,
+        product_code='SM-G991U',
+        canonical_product_code='SM-G991U',
+        device_marketing_name='Galaxy S21',
+        product_code_match=True,
+        warnings_acknowledged=True,
+        battery_level=72,
+        package_id='regional-match-demo',
+        pit_required=True,
+      )
+    )
+
+    self.assertEqual(report.gate, PreflightGate.BLOCKED)
+    self.assertFalse(report.ready_for_execution)
+    self.assertTrue(
+      any(
+        signal.rule_id == 'pit_required'
+        and signal.severity == PreflightSeverity.BLOCK
+        for signal in report.signals
+      )
+    )
+
 
 if __name__ == '__main__':
   unittest.main()

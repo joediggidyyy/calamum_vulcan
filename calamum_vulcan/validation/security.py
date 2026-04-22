@@ -505,17 +505,21 @@ def _inspect_only_evidence_contract_check() -> SecurityCheckResult:
 def _fallback_visibility_contract_check() -> SecurityCheckResult:
   live_model_text = _read_text(LIVE_DEVICE_MODEL_PATH)
   pit_model_text = _read_text(PIT_MODEL_PATH)
+  reporting_model_text = _read_text(REPORTING_MODEL_PATH)
   reporting_builder_text = _read_text(REPORTING_BUILDER_PATH)
   if (
     'class LiveFallbackPosture' in live_model_text
+    and 'class LivePathIdentity' in live_model_text
     and 'class PitFallbackPosture' in pit_model_text
+    and 'class LivePathIdentityEvidence' in reporting_model_text
     and 'fallback_posture=live_detection.fallback_posture.value' in reporting_builder_text
+    and 'path_identity=_build_live_path_identity_evidence(session)' in reporting_builder_text
     and 'fallback_posture=pit_inspection.fallback_posture.value' in reporting_builder_text
   ):
     return SecurityCheckResult(
       name='fallback_visibility_contract',
       status='passed',
-      summary='Fallback posture remains an explicit evidence field for both live detection and PIT review surfaces.',
+      summary='Fallback posture and delegated path identity remain explicit evidence fields for both live detection and PIT review surfaces.',
       details=(
         LIVE_DEVICE_MODEL_PATH.as_posix(),
         PIT_MODEL_PATH.as_posix(),

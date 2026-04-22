@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 from dataclasses import replace
 from datetime import datetime
 from datetime import timezone
@@ -31,19 +32,23 @@ from ..adapters.adb_fastboot import build_fastboot_detect_command_plan
 from ..adapters.adb_fastboot import build_fastboot_reboot_command_plan
 from ..adapters.adb_fastboot import execute_android_tools_command
 from ..adapters.heimdall import build_download_pit_command_plan
+from ..adapters.heimdall import build_detect_device_command_plan
 from ..adapters.heimdall import build_print_pit_command_plan
 from ..adapters.heimdall import execute_heimdall_command
+from ..adapters.heimdall import run_bounded_heimdall_flash_session
 from .demo import available_scenarios
 from .demo import available_adapter_fixtures
 from .demo import build_demo_pit_inspection
 from .demo import available_transport_sources
 from .demo import build_demo_adapter_session
 from .demo import build_demo_package_assessment
+from .demo import build_demo_safe_path_runtime_context
 from .demo import build_demo_session
 from .demo import scenario_label
 from .integration import available_integration_suites
 from .integration import build_orchestration_close_bundle
 from .integration import build_read_side_close_bundle
+from .integration import build_safe_path_close_bundle
 from .integration import build_sprint_close_bundle
 from .integration import render_sprint_close_bundle_markdown
 from .integration import serialize_sprint_close_bundle_json
@@ -51,7 +56,9 @@ from .integration import write_sprint_close_bundle
 from ..domain.live_device import LiveFallbackPosture
 from ..domain.live_device import LiveDeviceSource
 from ..domain.live_device import apply_live_device_info_trace
+from ..domain.live_device import build_heimdall_live_detection_session
 from ..domain.live_device import build_live_detection_session
+from ..domain.flash_plan import build_reviewed_flash_plan
 from ..domain.package import PackageArchiveImportError
 from ..domain.package import assess_package_archive
 from ..domain.pit import PitInspectionState
@@ -62,6 +69,7 @@ from ..domain.reporting import render_session_evidence_markdown
 from ..domain.reporting import serialize_session_evidence_json
 from ..domain.reporting import write_session_evidence_report
 from ..domain.state import build_inspection_workflow
+from ..domain.state import RuntimeSessionRejected
 from ..fixtures import available_package_manifest_fixtures
 from .qt_compat import QT_AVAILABLE
 from .qt_compat import QtWidgets
@@ -333,6 +341,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     help='Run the inspect-only workflow: live detect/info plus PIT review with exportable read-side evidence.',
   )
   parser.add_argument(
+    '--execute-flash-plan',
+    action='store_true',
+    help='Run the platform-supervised bounded safe-path flash lane. Currently this requires --transport-source heimdall-adapter so the delegated lower transport remains explicit.',
+  )
+  parser.add_argument(
     '--device-serial',
     default=None,
     help='Optional serial selector for live adb/fastboot control commands.',
@@ -462,6 +475,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(render_session_evidence_markdown(inspection_report))
     return 0
 
+  if args.execute_flash_plan:
+    _validate_execution_inputs(args)
+    execution_report, execution_rejected, transport_trace = _run_execute_flash_plan_workflow(
+      args,
+      scenario_label(args.scenario),
+    )
+    print(
+      _render_execute_result(
+        execution_report,
+        execution_rejected,
+        args.control_format,
+      )
+    )
+    if args.evidence_output:
+      output_path = write_session_evidence_report(
+        execution_report,
+        Path(args.evidence_output),
+        format_name=args.evidence_format,
+        transport_trace=transport_trace,
+      )
+      print(
+        'evidence_written="{path}" format="{format_name}"'.format(
+          path=output_path,
+          format_name=args.evidence_format,
+        )
+      )
+    elif args.export_evidence:
+      if args.evidence_format == 'json':
+        print(serialize_session_evidence_json(execution_report))
+      else:
+        print(render_session_evidence_markdown(execution_report))
+    return 0
+
   bundle = None
   if args.integration_suite == 'sprint-close':
     bundle = build_sprint_close_bundle(captured_at_utc=args.captured_at_utc)
@@ -469,6 +515,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     bundle = build_orchestration_close_bundle(captured_at_utc=args.captured_at_utc)
   elif args.integration_suite == 'read-side-close':
     bundle = build_read_side_close_bundle(captured_at_utc=args.captured_at_utc)
+  elif args.integration_suite == 'safe-path-close':
+    bundle = build_safe_path_close_bundle(captured_at_utc=args.captured_at_utc)
   if bundle is not None:
     if args.suite_output:
       output_path = write_sprint_close_bundle(
@@ -526,6 +574,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     pit_inspection=pit_inspection,
     transport_trace=transport_trace,
     captured_at_utc=args.captured_at_utc,
+    pit_required_for_safe_path=True,
   )
   model = build_shell_view_model(
     session,
@@ -535,6 +584,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     transport_trace=transport_trace,
     session_report=session_report,
     boot_unhydrated=args.boot_unhydrated,
+    pit_required_for_safe_path=True,
   )
   shell_contract = describe_shell(model)
   if args.describe_only:
@@ -613,6 +663,19 @@ def _validate_inspection_inputs(args: argparse.Namespace) -> None:
   if args.transport_source == 'heimdall-adapter':
     raise SystemExit(
       'Inspect-only workflow currently requires --transport-source state-fixture because adapter-backed runtime traces imply write-side activity.'
+    )
+
+
+def _validate_execution_inputs(args: argparse.Namespace) -> None:
+  """Validate bounded safe-path execution boundaries before transport begins."""
+
+  if args.integration_suite is not None:
+    raise SystemExit(
+      'Choose either --execute-flash-plan or --integration-suite, not both.'
+    )
+  if args.transport_source != 'heimdall-adapter':
+    raise SystemExit(
+      'Bounded safe-path execution currently requires --transport-source heimdall-adapter so the delegated lower transport remains explicit.'
     )
 
 
@@ -835,11 +898,12 @@ def _build_live_control_plan(args: argparse.Namespace) -> Optional[AndroidToolsC
     args.adb_reboot is not None,
     args.fastboot_reboot is not None,
     bool(args.inspect_device),
+    bool(args.execute_flash_plan),
   ]
   if sum(1 for item in requested if item) > 1:
     raise SystemExit(
       'Select only one live companion action at a time: '
-      '--adb-detect, --fastboot-detect, --adb-reboot, --fastboot-reboot, or --inspect-device.'
+      '--adb-detect, --fastboot-detect, --adb-reboot, --fastboot-reboot, --inspect-device, or --execute-flash-plan.'
     )
   if args.adb_detect:
     return build_adb_detect_command_plan(device_serial=args.device_serial)
@@ -933,6 +997,18 @@ def _render_control_trace(
         summary=live_detection.summary,
       )
     )
+    lines.append(
+      'live_path ownership="{ownership}" path_label="{label}" delegated_path_label="{delegated}" identity_confidence="{confidence}" mode_label="{mode}" summary="{summary}"'.format(
+        ownership=live_detection.path_identity.ownership.value,
+        label=live_detection.path_identity.path_label,
+        delegated=live_detection.path_identity.delegated_path_label,
+        confidence=live_detection.path_identity.identity_confidence.value,
+        mode=live_detection.path_identity.mode_label,
+        summary=live_detection.path_identity.summary,
+      )
+    )
+    for guidance in live_detection.path_identity.operator_guidance[:2]:
+      lines.append('live_path_guidance="{guidance}"'.format(guidance=guidance))
     if live_detection.snapshot is not None:
       lines.append(
         'live_identity serial="{serial}" mode="{mode}" transport="{transport}" support_posture="{support}" product="{product}" canonical_product="{canonical}" marketing_name="{name}"'.format(
@@ -1064,10 +1140,63 @@ def _run_inspect_only_workflow(
   )
 
 
+def _run_execute_flash_plan_workflow(
+  args: argparse.Namespace,
+  scenario_name: str,
+):
+  """Run the bounded safe-path execution lane and return report plus status."""
+
+  _validate_package_inputs(args)
+  (
+    base_session,
+    package_assessment,
+    pit_inspection,
+    fixture_name,
+    process_result,
+  ) = build_demo_safe_path_runtime_context(
+    args.scenario,
+    package_fixture_name=args.package_fixture,
+    adapter_fixture_name=args.adapter_fixture,
+  )
+  reviewed_flash_plan = build_reviewed_flash_plan(package_assessment)
+  execution_rejected = None
+  transport_trace = None
+
+  def _runner(command_plan: object) -> object:
+    del command_plan
+    return process_result
+
+  try:
+    runtime_result = run_bounded_heimdall_flash_session(
+      base_session,
+      reviewed_flash_plan,
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      runner=_runner,
+      fixture_name=fixture_name,
+    )
+    session = runtime_result.session
+    transport_trace = runtime_result.trace
+  except RuntimeSessionRejected as error:
+    session = base_session
+    execution_rejected = str(error)
+
+  report = build_session_evidence_report(
+    session,
+    scenario_name=scenario_name,
+    package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
+    transport_trace=transport_trace,
+    captured_at_utc=args.captured_at_utc,
+    pit_required_for_safe_path=True,
+  )
+  return report, execution_rejected, transport_trace
+
+
 def _run_inspect_only_live_detection(
   device_serial: Optional[str],
 ):
-  """Run the unified inspect-only detection path across ADB and fastboot."""
+  """Run the unified inspect-only detection path across ADB, fastboot, and Heimdall."""
 
   adb_trace = execute_android_tools_command(
     build_adb_detect_command_plan(device_serial=device_serial)
@@ -1094,13 +1223,13 @@ def _run_inspect_only_live_detection(
       ),
       source_labels=('adb', 'fastboot'),
     )
-  return build_live_detection_session(
-    fastboot_trace,
-    fallback_posture=LiveFallbackPosture.ENGAGED,
-    fallback_reason=(
-      'ADB did not establish a live device; fastboot fallback also failed to capture a live companion.'
-    ),
-    source_labels=('adb', 'fastboot'),
+  heimdall_trace = execute_heimdall_command(
+    build_detect_device_command_plan()
+  )
+  return build_heimdall_live_detection_session(
+    heimdall_trace,
+    source_labels=('adb', 'fastboot', 'heimdall'),
+    treat_missing_device_as_cleared=True,
   )
 
 
@@ -1193,6 +1322,67 @@ def _render_inspection_result(report, format_name: str) -> str:
   ]
   for boundary in report.inspection.action_boundaries:
     lines.append('inspection_boundary="{boundary}"'.format(boundary=boundary))
+  return '\n'.join(lines)
+
+
+def _render_execute_result(
+  report,
+  execution_rejected: Optional[str],
+  format_name: str,
+) -> str:
+  """Render one bounded safe-path execute result for operator review."""
+
+  execution_allowed = (
+    execution_rejected is None and report.transport.command_display != 'not_invoked'
+  )
+  if format_name == 'json':
+    return json.dumps(
+      {
+        'scenario_name': report.scenario_name,
+        'session_phase': report.session_phase,
+        'summary': report.summary,
+        'execution_allowed': execution_allowed,
+        'execution_rejected': execution_rejected,
+        'authority': asdict(report.authority),
+        'flash_plan': {
+          'plan_id': report.flash_plan.plan_id,
+          'ready_for_transport': report.flash_plan.ready_for_transport,
+          'transport_backend': report.flash_plan.transport_backend,
+        },
+        'transport': asdict(report.transport),
+        'outcome': asdict(report.outcome),
+      },
+      indent=2,
+      sort_keys=True,
+    )
+
+  lines = [
+    'safe_path_result execution_allowed="{allowed}" session_phase="{phase}" launch_path="{path}" ownership="{ownership}" readiness="{readiness}" transport_state="{transport_state}" summary="{summary}"'.format(
+      allowed='yes' if execution_allowed else 'no',
+      phase=report.session_phase,
+      path=report.authority.selected_launch_path,
+      ownership=report.authority.ownership,
+      readiness=report.authority.readiness,
+      transport_state=report.transport.state,
+      summary=report.summary,
+    ),
+    'safe_path_boundary="Platform supervises the bounded reviewed flash session while Heimdall remains the delegated lower transport lane."',
+  ]
+  if execution_rejected is not None:
+    lines.append('safe_path_rejected="{reason}"'.format(
+      reason=execution_rejected,
+    ))
+  elif report.transport.command_display != 'not_invoked':
+    lines.append('safe_path_command="{command}"'.format(
+      command=report.transport.command_display,
+    ))
+  lines.append('safe_path_next="{next_action}"'.format(
+    next_action=report.outcome.next_action,
+  ))
+  if report.outcome.recovery_guidance:
+    lines.append('safe_path_recovery="{guidance}"'.format(
+      guidance=report.outcome.recovery_guidance[0],
+    ))
   return '\n'.join(lines)
 
 

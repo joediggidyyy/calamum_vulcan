@@ -1,24 +1,47 @@
 """Heimdall adapter seam for Calamum Vulcan."""
 
-from .builder import build_command_plan_for_operation
-from .builder import build_detect_device_command_plan
-from .builder import build_download_pit_command_plan
-from .builder import build_flash_command_plan
-from .builder import build_flash_command_plan_from_reviewed_plan
-from .builder import build_print_pit_command_plan
+from importlib import import_module
+
 from .model import HeimdallCapability
 from .model import HeimdallCommandPlan
 from .model import HeimdallNormalizedTrace
 from .model import HeimdallOperation
 from .model import HeimdallProcessResult
 from .model import HeimdallTraceState
-from .normalizer import normalize_heimdall_result
-from .runtime import BoundedHeimdallRuntimeResult
-from .runtime import PROCESS_TIMEOUT_SECONDS
-from .runtime import apply_heimdall_trace
-from .runtime import execute_heimdall_command
-from .runtime import replay_heimdall_process_result
-from .runtime import run_bounded_heimdall_flash_session
+
+
+_LAZY_EXPORTS = {
+  'build_command_plan_for_operation': '.builder',
+  'build_detect_device_command_plan': '.builder',
+  'build_download_pit_command_plan': '.builder',
+  'build_flash_command_plan': '.builder',
+  'build_flash_command_plan_from_reviewed_plan': '.builder',
+  'build_print_pit_command_plan': '.builder',
+  'normalize_heimdall_result': '.normalizer',
+  'BoundedHeimdallRuntimeResult': '.runtime',
+  'PROCESS_TIMEOUT_SECONDS': '.runtime',
+  'apply_heimdall_trace': '.runtime',
+  'execute_heimdall_command': '.runtime',
+  'replay_heimdall_process_result': '.runtime',
+  'run_bounded_heimdall_flash_session': '.runtime',
+}
+
+
+def __getattr__(name: str):
+  """Lazily resolve builder, normalizer, and runtime exports."""
+
+  module_name = _LAZY_EXPORTS.get(name)
+  if module_name is None:
+    raise AttributeError(
+      "module '{module}' has no attribute '{name}'".format(
+        module=__name__,
+        name=name,
+      )
+    )
+  module = import_module(module_name, __name__)
+  value = getattr(module, name)
+  globals()[name] = value
+  return value
 
 __all__ = [
   'HeimdallCapability',

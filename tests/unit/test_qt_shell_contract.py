@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+import json
 import os
 import sys
 import tempfile
@@ -10,6 +12,7 @@ from pathlib import Path
 import time
 import unittest
 from unittest import mock
+import zipfile
 
 
 FINAL_EXAM_ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +24,7 @@ from calamum_vulcan.app.demo import build_demo_package_assessment
 from calamum_vulcan.app.demo import build_demo_pit_inspection
 from calamum_vulcan.app.demo import scenario_label
 from calamum_vulcan.app.qt_compat import QT_AVAILABLE
+from calamum_vulcan.app.view_models import LiveCompanionDeviceViewModel
 from calamum_vulcan.app.view_models import PANEL_TITLES
 from calamum_vulcan.app.view_models import build_shell_view_model
 
@@ -33,6 +37,9 @@ if QT_AVAILABLE:
   from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
   from calamum_vulcan.adapters.adb_fastboot import build_fastboot_detect_command_plan
   from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
+  from calamum_vulcan.adapters.heimdall import HeimdallOperation
+  from calamum_vulcan.adapters.heimdall import HeimdallProcessResult
+  from calamum_vulcan.adapters.heimdall import build_detect_device_command_plan
   from calamum_vulcan.adapters.heimdall import build_print_pit_command_plan
   from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
   os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -44,7 +51,11 @@ if QT_AVAILABLE:
   from calamum_vulcan.app.qt_shell import DetailRow
   from calamum_vulcan.app.qt_shell import MetricBlock
   from calamum_vulcan.app.qt_shell import get_or_create_application
+  from calamum_vulcan.app.qt_shell import launch_shell
+  from calamum_vulcan.fixtures import load_heimdall_process_fixture
   from calamum_vulcan.fixtures import load_heimdall_pit_fixture
+  from calamum_vulcan.fixtures import load_package_manifest_fixture
+  from calamum_vulcan.domain.live_device import build_heimdall_live_detection_session
 
 
 def _ready_adb_detection_trace():
@@ -120,6 +131,39 @@ def _ready_print_pit_trace():
     build_print_pit_command_plan(),
     load_heimdall_pit_fixture('pit-print-ready-g991u'),
   )
+
+
+def _ready_heimdall_detection_trace():
+  return normalize_heimdall_result(
+    build_detect_device_command_plan(),
+    load_heimdall_process_fixture('detect-generic-ready'),
+  )
+
+
+def _no_device_heimdall_detection_trace():
+  return normalize_heimdall_result(
+    build_detect_device_command_plan(),
+    load_heimdall_process_fixture('detect-none'),
+  )
+
+
+def _write_gui_package_archive(
+  temp_root: Path,
+  manifest_name: str = 'ready-standard',
+  manifest_payload: dict | None = None,
+) -> Path:
+  archive_path = temp_root / 'gui_ready_package.zip'
+  manifest = manifest_payload or load_package_manifest_fixture(manifest_name)
+
+  with zipfile.ZipFile(archive_path, 'w') as archive:
+    archive.writestr('package_manifest.json', json.dumps(manifest))
+    for checksum in manifest.get('checksums', []):
+      file_name = checksum.get('file_name')
+      if not isinstance(file_name, str) or not file_name:
+        continue
+      archive.writestr(file_name, ('payload-for-' + file_name).encode('utf-8'))
+
+  return archive_path
 
 
 @unittest.skipUnless(QT_AVAILABLE, 'Qt runtime not installed in test environment.')
@@ -234,11 +278,17 @@ class QtShellContractTests(unittest.TestCase):
     window.resize(960, 420)
     window.show()
 
+    brand_mark = window.findChild(BrandMark)
+    primary_pane = window.findChild(QtWidgets.QWidget, 'primary-pane-shell')
     main_scroll = window.findChild(QtWidgets.QScrollArea, 'main-pane-scroll')
     control_scroll = window.findChild(QtWidgets.QScrollArea, 'control-deck-scroll')
 
+    self.assertIsNotNone(brand_mark)
+    self.assertIsNotNone(primary_pane)
     self.assertIsNotNone(main_scroll)
     self.assertIsNotNone(control_scroll)
+    self.assertIs(brand_mark.parentWidget(), primary_pane)
+    self.assertIsNot(brand_mark.parentWidget(), main_scroll.widget())
     self.assertEqual(
       main_scroll.verticalScrollBarPolicy(),
       qt_shell_module.QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
@@ -257,14 +307,92 @@ class QtShellContractTests(unittest.TestCase):
       )
     )
 
+    brand_origin = brand_mark.mapTo(window, qt_shell_module.QtCore.QPoint(0, 0)).y()
+
     main_value = min(80, main_scroll.verticalScrollBar().maximum())
     control_value = min(120, control_scroll.verticalScrollBar().maximum())
     main_scroll.verticalScrollBar().setValue(main_value)
     control_scroll.verticalScrollBar().setValue(control_value)
+    self.application.processEvents()
 
     self.assertEqual(main_scroll.verticalScrollBar().value(), main_value)
     self.assertEqual(control_scroll.verticalScrollBar().value(), control_value)
+    self.assertEqual(
+      brand_mark.mapTo(window, qt_shell_module.QtCore.QPoint(0, 0)).y(),
+      brand_origin,
+    )
     window.close()
+
+  def test_launch_shell_maximizes_interactive_window(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('ready'),
+      package_assessment=package_assessment,
+    )
+    application = get_or_create_application()
+    fake_window = mock.Mock()
+    fake_watchdog = mock.Mock()
+
+    with mock.patch.dict(os.environ, {'QT_QPA_PLATFORM': 'windows'}, clear=False):
+      with mock.patch.object(
+        qt_shell_module,
+        'get_or_create_application',
+        return_value=application,
+      ), mock.patch.object(
+        qt_shell_module,
+        'ShellWindow',
+        return_value=fake_window,
+      ), mock.patch.object(
+        qt_shell_module,
+        '_GuiHangWatchdog',
+        return_value=fake_watchdog,
+      ), mock.patch.object(
+        QtWidgets.QApplication,
+        'exec',
+        return_value=0,
+      ):
+        exit_code = launch_shell(model, duration_ms=0)
+
+    self.assertEqual(exit_code, 0)
+    fake_window.showMaximized.assert_called_once_with()
+    fake_window.show.assert_not_called()
+
+  def test_launch_shell_keeps_windowed_show_for_duration_bounded_runs(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('ready'),
+      package_assessment=package_assessment,
+    )
+    application = get_or_create_application()
+    fake_window = mock.Mock()
+    fake_watchdog = mock.Mock()
+
+    with mock.patch.object(
+      qt_shell_module,
+      'get_or_create_application',
+      return_value=application,
+    ), mock.patch.object(
+      qt_shell_module,
+      'ShellWindow',
+      return_value=fake_window,
+    ), mock.patch.object(
+      qt_shell_module,
+      '_GuiHangWatchdog',
+      return_value=fake_watchdog,
+    ), mock.patch.object(
+      QtWidgets.QApplication,
+      'exec',
+      return_value=0,
+    ):
+      exit_code = launch_shell(model, duration_ms=25)
+
+    self.assertEqual(exit_code, 0)
+    fake_window.show.assert_called_once_with()
+    fake_window.showMaximized.assert_not_called()
 
   def test_dashboard_stacks_preflight_and_package_without_leaving_a_blank_left_cell(self) -> None:
     session = build_demo_session('no-device')
@@ -986,6 +1114,75 @@ class QtShellContractTests(unittest.TestCase):
       self.assertIn('Fastboot', window.live_status_text())
       window.close()
 
+  def test_detect_device_button_falls_through_to_heimdall_download_mode(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+
+    with mock.patch(
+      'calamum_vulcan.app.qt_shell.execute_android_tools_command',
+      side_effect=(
+        _no_device_adb_detection_trace(),
+        normalize_android_tools_result(
+          build_fastboot_detect_command_plan(),
+          AndroidToolsProcessResult(
+            fixture_name='fastboot-none',
+            operation=AndroidToolsOperation.FASTBOOT_DEVICES,
+            backend=AndroidToolsBackend.FASTBOOT,
+            exit_code=0,
+            stdout_lines=(),
+          ),
+        ),
+      ),
+    ) as mocked_android, mock.patch(
+      'calamum_vulcan.app.qt_shell.execute_heimdall_command',
+      return_value=_ready_heimdall_detection_trace(),
+    ) as mocked_heimdall:
+      window = ShellWindow(model)
+
+      detect_button = window.findChild(
+        QtWidgets.QPushButton,
+        'control-action-detect-device',
+      )
+
+      self.assertIsNotNone(detect_button)
+      detect_button.click()
+
+      self.assertTrue(
+        self._process_events_until(lambda: mocked_android.call_count == 2)
+      )
+      self.assertTrue(
+        self._process_events_until(lambda: mocked_heimdall.call_count == 1)
+      )
+      self.assertTrue(
+        self._process_events_until(
+          lambda: window.phase_label() == 'Download-Mode Device Detected'
+        )
+      )
+
+      self.assertEqual(window.phase_label(), 'Download-Mode Device Detected')
+      self.assertIn('HEIMDALL', window.panel_summary('Device Identity'))
+      self.assertTrue(
+        any(
+          'Live companion backend: HEIMDALL' in line
+          for line in window.panel_detail_lines('Device Identity')
+        )
+      )
+      self.assertTrue(
+        any(
+          'Live mode: heimdall/download' in line
+          for line in window.panel_detail_lines('Device Identity')
+        )
+      )
+      device_pills = dict(window.status_pill_values())
+      self.assertEqual(device_pills['Phase'], 'Download-Mode Device Detected')
+      self.assertIn('SM-G991U via HEIMDALL', device_pills['Device'])
+      self.assertIn('Heimdall', window.live_status_text())
+      window.close()
+
   def test_redetect_after_disconnect_clears_live_device_surfaces(self) -> None:
     session = build_demo_session('no-device')
     model = build_shell_view_model(
@@ -1013,7 +1210,10 @@ class QtShellContractTests(unittest.TestCase):
         _no_device_adb_detection_trace(),
         no_device_fastboot_trace,
       ),
-    ) as mocked_execute:
+    ) as mocked_execute, mock.patch(
+      'calamum_vulcan.app.qt_shell.execute_heimdall_command',
+      return_value=_no_device_heimdall_detection_trace(),
+    ) as mocked_heimdall:
       window = ShellWindow(model)
 
       detect_button = window.findChild(
@@ -1044,6 +1244,9 @@ class QtShellContractTests(unittest.TestCase):
         self._process_events_until(lambda: mocked_execute.call_count == 4)
       )
       self.assertTrue(
+        self._process_events_until(lambda: mocked_heimdall.call_count == 1)
+      )
+      self.assertTrue(
         self._process_events_until(
           lambda: 'No live device is currently detected.' in window.panel_summary('Device Identity')
         )
@@ -1060,59 +1263,359 @@ class QtShellContractTests(unittest.TestCase):
       self.assertEqual(fastboot_identity.text(), 'Fastboot: --')
       window.close()
 
-  def test_placeholder_control_reports_review_state_when_clicked(self) -> None:
+  def test_disconnect_monitor_clears_live_surfaces_after_debounce(self) -> None:
+    live_detection = build_heimdall_live_detection_session(
+      _ready_heimdall_detection_trace(),
+      source_labels=('adb', 'fastboot', 'heimdall'),
+      treat_missing_device_as_cleared=True,
+    )
+    model = build_shell_view_model(
+      replace(build_demo_session('no-device'), live_detection=live_detection),
+      scenario_name='Debounced disconnect clear',
+    )
+
+    with mock.patch.object(
+      qt_shell_module,
+      'GUI_DISCONNECT_CLEAR_DEBOUNCE_MS',
+      40,
+    ):
+      window = ShellWindow(model)
+      window._disconnect_monitor_armed = True
+      snapshot = window._base_session.live_detection.snapshot
+
+      self.assertIsNotNone(snapshot)
+      with mock.patch.object(window, '_refresh_disconnect_monitor', return_value=None), mock.patch.object(
+        window._disconnect_recheck_timer,
+        'start',
+        return_value=None,
+      ):
+        window._handle_disconnect_monitor_result(
+          snapshot.source.value,
+          snapshot.serial,
+          _no_device_heimdall_detection_trace(),
+          None,
+        )
+
+      self.assertTrue(
+        self._process_events_until(
+          lambda: 'No live device is currently detected.' in window.panel_summary('Device Identity'),
+          timeout_seconds=1.5,
+        )
+      )
+
+      device_pills = dict(window.status_pill_values())
+      self.assertEqual(device_pills['Device'], '--')
+      self.assertIn('disconnect', window.live_status_text().lower())
+      window.close()
+
+  def test_disconnect_monitor_cancels_pending_clear_when_presence_recovers(self) -> None:
+    live_detection = build_heimdall_live_detection_session(
+      _ready_heimdall_detection_trace(),
+      source_labels=('adb', 'fastboot', 'heimdall'),
+      treat_missing_device_as_cleared=True,
+    )
+    model = build_shell_view_model(
+      replace(build_demo_session('no-device'), live_detection=live_detection),
+      scenario_name='Disconnect debounce recovery',
+    )
+
+    with mock.patch.object(
+      qt_shell_module,
+      'GUI_DISCONNECT_CLEAR_DEBOUNCE_MS',
+      80,
+    ):
+      window = ShellWindow(model)
+      window._disconnect_monitor_armed = True
+      snapshot = window._base_session.live_detection.snapshot
+
+      self.assertIsNotNone(snapshot)
+      with mock.patch.object(window, '_refresh_disconnect_monitor', return_value=None), mock.patch.object(
+        window._disconnect_recheck_timer,
+        'start',
+        return_value=None,
+      ):
+        window._handle_disconnect_monitor_result(
+          snapshot.source.value,
+          snapshot.serial,
+          _no_device_heimdall_detection_trace(),
+          None,
+        )
+        window._handle_disconnect_monitor_result(
+          snapshot.source.value,
+          snapshot.serial,
+          _ready_heimdall_detection_trace(),
+          None,
+        )
+
+      self.assertFalse(
+        self._process_events_until(
+          lambda: 'No live device is currently detected.' in window.panel_summary('Device Identity'),
+          timeout_seconds=0.25,
+        )
+      )
+
+      device_pills = dict(window.status_pill_values())
+      self.assertIn('HEIMDALL', device_pills['Device'])
+      window.close()
+
+  def test_load_package_button_reviews_real_archive_and_unlocks_execute_lane(self) -> None:
+    ready_session = build_demo_session('ready')
+    ready_package = build_demo_package_assessment('ready', session=ready_session)
+    ready_pit = build_demo_pit_inspection(
+      'ready',
+      session=ready_session,
+      package_assessment=ready_package,
+    )
+    live_detection = build_heimdall_live_detection_session(
+      _ready_heimdall_detection_trace(),
+    )
+    model = build_shell_view_model(
+      replace(build_demo_session('no-device'), live_detection=live_detection),
+      scenario_name='GUI package load workflow',
+      pit_inspection=ready_pit,
+      pit_required_for_safe_path=True,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      archive_path = _write_gui_package_archive(Path(temp_dir))
+      with mock.patch.object(
+        QtWidgets.QFileDialog,
+        'getOpenFileName',
+        return_value=(str(archive_path), 'Package archives (*.zip)'),
+      ):
+        window = ShellWindow(model)
+
+        load_package_button = window.findChild(
+          QtWidgets.QPushButton,
+          'control-action-load-package',
+        )
+
+        self.assertIsNotNone(load_package_button)
+        self.assertTrue(load_package_button.isEnabled())
+
+        load_package_button.click()
+
+        self.assertTrue(
+          self._process_events_until(
+            lambda: 'Loaded package regional-match-demo' in window.live_status_text(),
+            timeout_seconds=1.5,
+          )
+        )
+        self.assertNotIn(
+          'No firmware package is currently loaded.',
+          window.panel_summary('Package Summary'),
+        )
+        execute_button = window.findChild(
+          QtWidgets.QPushButton,
+          'control-action-execute-flash-plan',
+        )
+        self.assertIsNotNone(execute_button)
+        self.assertTrue(execute_button.isEnabled())
+        window.close()
+
+  def test_execute_flash_plan_button_runs_bounded_heimdall_lane_after_review_inputs_ready(self) -> None:
+    ready_session = build_demo_session('ready')
+    ready_package = build_demo_package_assessment('ready', session=ready_session)
+    ready_pit = build_demo_pit_inspection(
+      'ready',
+      session=ready_session,
+      package_assessment=ready_package,
+    )
+    live_detection = build_heimdall_live_detection_session(
+      _ready_heimdall_detection_trace(),
+    )
+    model = build_shell_view_model(
+      replace(build_demo_session('no-device'), live_detection=live_detection),
+      scenario_name='GUI execute workflow',
+      pit_inspection=ready_pit,
+      pit_required_for_safe_path=True,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      archive_path = _write_gui_package_archive(Path(temp_dir))
+      with mock.patch.object(
+        QtWidgets.QFileDialog,
+        'getOpenFileName',
+        return_value=(str(archive_path), 'Package archives (*.zip)'),
+      ), mock.patch.object(
+        QtWidgets.QMessageBox,
+        'question',
+        return_value=QtWidgets.QMessageBox.StandardButton.Yes,
+      ) as mocked_question, mock.patch.object(
+        QtWidgets.QMessageBox,
+        'warning',
+        return_value=QtWidgets.QMessageBox.StandardButton.Yes,
+      ) as mocked_warning, mock.patch(
+        'calamum_vulcan.app.qt_shell.execute_heimdall_command',
+        side_effect=lambda command_plan: normalize_heimdall_result(
+          command_plan,
+          load_heimdall_process_fixture('flash-success'),
+        ),
+      ) as mocked_heimdall:
+        window = ShellWindow(model)
+
+        load_package_button = window.findChild(
+          QtWidgets.QPushButton,
+          'control-action-load-package',
+        )
+        self.assertIsNotNone(load_package_button)
+        load_package_button.click()
+
+        self.assertTrue(
+          self._process_events_until(
+            lambda: 'Loaded package regional-match-demo' in window.live_status_text(),
+            timeout_seconds=1.5,
+          )
+        )
+
+        execute_button = window.findChild(
+          QtWidgets.QPushButton,
+          'control-action-execute-flash-plan',
+        )
+        self.assertIsNotNone(execute_button)
+        self.assertTrue(execute_button.isEnabled())
+
+        execute_button.click()
+
+        self.assertTrue(
+          self._process_events_until(lambda: mocked_heimdall.call_count == 1)
+        )
+        self.assertTrue(
+          self._process_events_until(
+            lambda: window.phase_label() == 'Completed',
+            timeout_seconds=1.5,
+          )
+        )
+        self.assertEqual(mocked_question.call_count, 1)
+        self.assertEqual(mocked_warning.call_count, 0)
+        self.assertIn('completed', window.panel_summary('Transport State').lower())
+        self.assertIn('flash_package', ' '.join(window.panel_detail_lines('Transport State')))
+        window.close()
+
+  def test_continue_after_recovery_finalizes_resume_handoff_for_evidence_export(self) -> None:
+    ready_session = build_demo_session('ready')
+    ready_package = build_demo_package_assessment('ready', session=ready_session)
+    ready_pit = build_demo_pit_inspection(
+      'ready',
+      session=ready_session,
+      package_assessment=ready_package,
+    )
+    resume_manifest = load_package_manifest_fixture('ready-standard')
+    resume_manifest['flash_plan']['reboot_policy'] = 'no_reboot'
+    live_detection = build_heimdall_live_detection_session(
+      _ready_heimdall_detection_trace(),
+    )
+    model = build_shell_view_model(
+      replace(build_demo_session('no-device'), live_detection=live_detection),
+      scenario_name='GUI recovery continuation workflow',
+      pit_inspection=ready_pit,
+      pit_required_for_safe_path=True,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+      archive_path = _write_gui_package_archive(
+        Path(temp_dir),
+        manifest_payload=resume_manifest,
+      )
+      with mock.patch.object(
+        QtWidgets.QFileDialog,
+        'getOpenFileName',
+        return_value=(str(archive_path), 'Package archives (*.zip)'),
+      ), mock.patch.object(
+        QtWidgets.QMessageBox,
+        'question',
+        return_value=QtWidgets.QMessageBox.StandardButton.Yes,
+      ), mock.patch.object(
+        QtWidgets.QMessageBox,
+        'warning',
+        return_value=QtWidgets.QMessageBox.StandardButton.Yes,
+      ), mock.patch(
+        'calamum_vulcan.app.qt_shell.execute_heimdall_command',
+        side_effect=lambda command_plan: normalize_heimdall_result(
+          command_plan,
+          load_heimdall_process_fixture('flash-no-reboot-pause'),
+        ),
+      ):
+        window = ShellWindow(model)
+
+        load_package_button = window.findChild(
+          QtWidgets.QPushButton,
+          'control-action-load-package',
+        )
+        self.assertIsNotNone(load_package_button)
+        load_package_button.click()
+        self.assertTrue(
+          self._process_events_until(
+            lambda: 'Loaded package regional-match-demo' in window.live_status_text(),
+            timeout_seconds=1.5,
+          )
+        )
+
+        execute_button = window.findChild(
+          QtWidgets.QPushButton,
+          'control-action-execute-flash-plan',
+        )
+        self.assertIsNotNone(execute_button)
+        execute_button.click()
+
+        self.assertTrue(
+          self._process_events_until(
+            lambda: window.phase_label() == 'Resume Needed',
+            timeout_seconds=1.5,
+          )
+        )
+
+        continue_button = window.findChild(
+          QtWidgets.QPushButton,
+          'control-action-continue-after-recovery',
+        )
+        self.assertIsNotNone(continue_button)
+        self.assertTrue(continue_button.isEnabled())
+
+        continue_button.click()
+
+        self.assertTrue(
+          self._process_events_until(
+            lambda: window.phase_label() == 'Completed',
+            timeout_seconds=1.5,
+          )
+        )
+        self.assertIn('Manual recovery continuation recorded', window.live_status_text())
+        self.assertIn('finalized for evidence export', window.panel_summary('Transport State').lower())
+        window.close()
+
+  def test_read_pit_button_runs_bounded_pit_review_lane(self) -> None:
     session = build_demo_session('ready')
-    package_assessment = build_demo_package_assessment('ready', session=session)
     model = build_shell_view_model(
       session,
       scenario_name=scenario_label('ready'),
-      package_assessment=package_assessment,
-    )
-    window = ShellWindow(model)
-
-    load_package_button = window.findChild(
-      QtWidgets.QPushButton,
-      'control-action-load-package',
-    )
-
-    self.assertIsNotNone(load_package_button)
-    load_package_button.click()
-
-    self.assertIn('gui placeholder', window.live_status_text().lower())
-    self.assertIn('Load package', window.live_status_text())
-    window.close()
-
-  def test_inspect_device_button_runs_bounded_read_side_lane(self) -> None:
-    session = build_demo_session('no-device')
-    model = build_shell_view_model(
-      session,
-      scenario_name=scenario_label('no-device'),
-      boot_unhydrated=True,
+      live_device=LiveCompanionDeviceViewModel(
+        backend='heimdall',
+        serial='samsung-galaxy-lab-04',
+        state='download',
+        transport='download-mode',
+        product_code='SM-G991U',
+      ),
     )
 
     with mock.patch(
       'calamum_vulcan.app.qt_shell.execute_android_tools_command',
-      side_effect=(
-        _ready_adb_detection_trace(),
-        _ready_adb_info_trace(),
-      ),
+      side_effect=AssertionError('Read PIT should not invoke adb/fastboot probes when download-mode truth already exists.'),
     ) as mocked_android, mock.patch(
       'calamum_vulcan.app.qt_shell.execute_heimdall_command',
       return_value=_ready_print_pit_trace(),
     ) as mocked_heimdall:
       window = ShellWindow(model)
 
-      inspect_button = window.findChild(
+      read_pit_button = window.findChild(
         QtWidgets.QPushButton,
-        'control-action-inspect-device',
+        'control-action-read-pit',
       )
 
-      self.assertIsNotNone(inspect_button)
-      inspect_button.click()
+      self.assertIsNotNone(read_pit_button)
+      read_pit_button.click()
 
-      self.assertTrue(
-        self._process_events_until(lambda: mocked_android.call_count == 2)
-      )
+      mocked_android.assert_not_called()
       self.assertTrue(
         self._process_events_until(lambda: mocked_heimdall.call_count == 1)
       )

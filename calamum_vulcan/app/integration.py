@@ -19,6 +19,7 @@ from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_fastboot_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
+from calamum_vulcan.adapters.heimdall import build_detect_device_command_plan
 from calamum_vulcan.adapters.heimdall import build_print_pit_command_plan
 from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
 from calamum_vulcan.domain.reporting import REPORT_EXPORT_TARGETS
@@ -26,12 +27,15 @@ from calamum_vulcan.domain.reporting import REPORT_SCHEMA_VERSION
 from calamum_vulcan.domain.reporting import SessionEvidenceReport
 from calamum_vulcan.domain.reporting import build_session_evidence_report
 from calamum_vulcan.domain.live_device import LiveFallbackPosture
+from calamum_vulcan.domain.live_device import build_heimdall_live_detection_session
 from calamum_vulcan.domain.live_device import apply_live_device_info_trace
 from calamum_vulcan.domain.live_device import build_live_detection_session
 from calamum_vulcan.domain.pit import build_pit_inspection
+from calamum_vulcan.domain.safe_path import SAFE_PATH_CLOSE_SUITE_NAME
 from calamum_vulcan.domain.state import PlatformSession
 from calamum_vulcan.domain.state import build_inspection_workflow
 from calamum_vulcan.fixtures import load_heimdall_pit_fixture
+from calamum_vulcan.fixtures import load_heimdall_process_fixture
 
 from .demo import build_demo_adapter_session
 from .demo import build_demo_package_assessment
@@ -47,7 +51,10 @@ INTEGRATION_SUITE_NAMES = (
   'sprint-close',
   'orchestration-close',
   'read-side-close',
+  SAFE_PATH_CLOSE_SUITE_NAME,
 )
+
+PLANNED_INTEGRATION_SUITE_NAMES = ()
 
 SPRINT_CLOSE_CARRY_FORWARD_DEBT = (
   'Keep live-device subprocess transport out of `0.1.0`; the next release should define the first bounded runtime session loop explicitly.',
@@ -68,6 +75,13 @@ READ_SIDE_CLOSE_CARRY_FORWARD_DEBT = (
   'Decide whether fastboot-detected fallback sessions should gain any richer repo-owned identity beyond the current bounded labeling and guidance surface.',
   'Decide how much PIT/package alignment truth should graduate from evidence and guidance into harder runtime/preflight enforcement in `0.4.0`.',
   'Keep detached GUI host runtime hygiene under observation as live read-side coverage expands; no fresh orphan was observed in the latest closeout pass.',
+)
+
+SAFE_PATH_CLOSE_CARRY_FORWARD_DEBT = (
+  'Keep default native transport promotion deferred to `0.5.0`; Heimdall remains the delegated lower transport for the current Samsung subset.',
+  'Promote GUI package-load and bounded execute controls only after the new deck contract survives wider operator trials.',
+  'Expand real-hardware Heimdall detect fixtures so normalization coverage keeps pace with reviewed Samsung download-mode output variants.',
+  'Restore trusted-publication and release-rehearsal automation only after the safe-path-close suite stays stable end to end.',
 )
 
 
@@ -101,6 +115,7 @@ class SprintCloseScenarioResult:
   panel_titles: Tuple[str, ...]
   enabled_actions: Tuple[str, ...]
   shell_summary: str
+  action_states: Tuple[Tuple[str, str], ...] = ()
   transcript_preserved: bool = False
   transcript_reference_file: Optional[str] = None
   transcript_line_count: int = 0
@@ -196,6 +211,12 @@ def available_integration_suites() -> Tuple[str, ...]:
   return INTEGRATION_SUITE_NAMES
 
 
+def planned_integration_suites() -> Tuple[str, ...]:
+  """Return planned-but-not-yet-public integrated review bundle names."""
+
+  return PLANNED_INTEGRATION_SUITE_NAMES
+
+
 def build_sprint_close_bundle(
   captured_at_utc: Optional[str] = None,
 ) -> SprintCloseBundle:
@@ -289,6 +310,36 @@ def build_read_side_close_bundle(
   )
 
 
+def build_safe_path_close_bundle(
+  captured_at_utc: Optional[str] = None,
+) -> SprintCloseBundle:
+  """Build the FS4-07 safe-path-close bundle for Sprint 0.4.0."""
+
+  captured = captured_at_utc or _utc_now()
+  scenarios = _build_safe_path_close_scenarios(captured)
+  proof_points = _build_safe_path_close_proof_points(scenarios)
+  passed_count = sum(1 for point in proof_points if point.passed)
+  summary = (
+    'Sprint 0.4.0 closes with {passed}/{total} safe-path-close proof points '
+    'satisfied across {scenario_count} integrated scenarios.'.format(
+      passed=passed_count,
+      total=len(proof_points),
+      scenario_count=len(scenarios),
+    )
+  )
+  return SprintCloseBundle(
+    schema_version=REPORT_SCHEMA_VERSION,
+    bundle_id=_bundle_id(captured, prefix='cv-fs4-07-safe-path-close'),
+    release_version='0.4.0',
+    suite_name=SAFE_PATH_CLOSE_SUITE_NAME,
+    captured_at_utc=captured,
+    summary=summary,
+    proof_points=proof_points,
+    scenarios=scenarios,
+    carry_forward_debt=SAFE_PATH_CLOSE_CARRY_FORWARD_DEBT,
+  )
+
+
 def serialize_sprint_close_bundle_json(bundle: SprintCloseBundle) -> str:
   """Render one sprint-close bundle as formatted JSON."""
 
@@ -357,6 +408,12 @@ def render_sprint_close_bundle_markdown(bundle: SprintCloseBundle) -> str:
         '- next action: {next_action}'.format(next_action=scenario.next_action),
         '- enabled actions: {actions}'.format(
           actions=', '.join(scenario.enabled_actions) or 'none'
+        ),
+        '- action states: {states}'.format(
+          states=', '.join(
+            '{label}={state}'.format(label=label, state=state)
+            for label, state in scenario.action_states
+          ) or 'none'
         ),
         '- transcript: {transcript}'.format(
           transcript=(
@@ -440,6 +497,7 @@ def _build_scenario_result_from_context(
   package_assessment: Optional[object] = None,
   pit_inspection: Optional[object] = None,
   transport_trace: Optional[object] = None,
+  pit_required_for_safe_path: bool = False,
 ) -> SprintCloseScenarioResult:
   """Build one integrated scenario result from explicit session context."""
 
@@ -450,6 +508,7 @@ def _build_scenario_result_from_context(
     pit_inspection=pit_inspection,
     transport_trace=transport_trace,
     captured_at_utc=captured_at_utc,
+    pit_required_for_safe_path=pit_required_for_safe_path,
   )
   model = build_shell_view_model(
     session,
@@ -458,9 +517,10 @@ def _build_scenario_result_from_context(
     pit_inspection=pit_inspection,
     transport_trace=transport_trace,
     session_report=report,
+    pit_required_for_safe_path=pit_required_for_safe_path,
   )
   enabled_actions = tuple(
-    action.label for action in model.control_actions if action.enabled
+    action.label for action in model.control_actions if action.visible and action.enabled
   )
   return SprintCloseScenarioResult(
     scenario_id=scenario_id,
@@ -479,6 +539,9 @@ def _build_scenario_result_from_context(
     export_targets=report.host.export_targets,
     panel_titles=tuple(panel.title for panel in model.panels),
     enabled_actions=enabled_actions,
+    action_states=tuple(
+      (action.label, action.state.value) for action in model.control_actions
+    ),
     shell_summary=describe_shell(model),
     transcript_preserved=report.transcript.preserved,
     transcript_reference_file=report.transcript.reference_file_name,
@@ -804,6 +867,167 @@ def _build_read_side_close_scenarios(
   )
 
 
+def _build_safe_path_close_scenarios(
+  captured_at_utc: str,
+) -> Tuple[SprintCloseScenarioResult, ...]:
+  """Return the deterministic FS4-07 safe-path closeout scenario matrix."""
+
+  download_live_detection = _ready_heimdall_live_detection()
+
+  read_pit_required_session = replace(
+    build_demo_session('no-device'),
+    live_detection=download_live_detection,
+  )
+
+  load_package_pit = _ready_pit_inspection(
+    detected_product_code='SM-G991U',
+    package_assessment=None,
+  )
+  load_package_session = replace(
+    build_demo_session('no-device'),
+    live_detection=download_live_detection,
+    inspection=build_inspection_workflow(
+      download_live_detection,
+      pit_inspection=load_package_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  ready_session = build_demo_session('ready')
+  ready_package = build_demo_package_assessment('ready', session=ready_session)
+  ready_pit = build_demo_pit_inspection(
+    'ready',
+    session=ready_session,
+    package_assessment=ready_package,
+  )
+  ready_session = replace(
+    ready_session,
+    live_detection=download_live_detection,
+    inspection=build_inspection_workflow(
+      download_live_detection,
+      pit_inspection=ready_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  runtime_session, runtime_package, runtime_trace = build_demo_adapter_session('ready')
+  runtime_pit = build_demo_pit_inspection(
+    'ready',
+    session=build_demo_session('ready'),
+    package_assessment=runtime_package,
+  )
+  runtime_session = replace(
+    runtime_session,
+    live_detection=download_live_detection,
+    inspection=build_inspection_workflow(
+      download_live_detection,
+      pit_inspection=runtime_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  mismatch_session = build_demo_session('blocked')
+  mismatch_package = build_demo_package_assessment(
+    'blocked',
+    session=mismatch_session,
+  )
+  mismatch_pit = build_demo_pit_inspection(
+    'blocked',
+    session=mismatch_session,
+    package_assessment=mismatch_package,
+  )
+  mismatch_session = replace(
+    mismatch_session,
+    live_detection=download_live_detection,
+    inspection=build_inspection_workflow(
+      download_live_detection,
+      pit_inspection=mismatch_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  fastboot_fallback = _fastboot_fallback_detection(device_present=True)
+  fastboot_fallback_session = replace(
+    build_demo_session('no-device'),
+    live_detection=fastboot_fallback,
+    inspection=build_inspection_workflow(
+      fastboot_fallback,
+      pit_inspection=None,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  return (
+    _build_scenario_result_from_context(
+      scenario_id='read-pit-required-review',
+      scenario_name='Read PIT required review',
+      transport_source='heimdall-read-side',
+      package_fixture=None,
+      captured_at_utc=captured_at_utc,
+      session=read_pit_required_session,
+      package_assessment=None,
+      pit_inspection=None,
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='load-package-required-review',
+      scenario_name='Load package required review',
+      transport_source='heimdall-read-side',
+      package_fixture=None,
+      captured_at_utc=captured_at_utc,
+      session=load_package_session,
+      package_assessment=None,
+      pit_inspection=load_package_pit,
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='safe-path-ready-review',
+      scenario_name='Bounded safe-path ready review',
+      transport_source='state-fixture',
+      package_fixture=ready_package.fixture_name,
+      captured_at_utc=captured_at_utc,
+      session=ready_session,
+      package_assessment=ready_package,
+      pit_inspection=ready_pit,
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='safe-path-runtime-complete',
+      scenario_name='Bounded safe-path runtime complete',
+      transport_source='heimdall-adapter',
+      package_fixture=runtime_package.fixture_name,
+      captured_at_utc=captured_at_utc,
+      session=runtime_session,
+      package_assessment=runtime_package,
+      pit_inspection=runtime_pit,
+      transport_trace=runtime_trace,
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='pit-mismatch-block-review',
+      scenario_name='PIT mismatch block review',
+      transport_source='state-fixture',
+      package_fixture=mismatch_package.fixture_name,
+      captured_at_utc=captured_at_utc,
+      session=mismatch_session,
+      package_assessment=mismatch_package,
+      pit_inspection=mismatch_pit,
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='fastboot-fallback-boundary-review',
+      scenario_name='Fastboot fallback boundary review',
+      transport_source='fastboot-read-side',
+      package_fixture=None,
+      captured_at_utc=captured_at_utc,
+      session=fastboot_fallback_session,
+      package_assessment=None,
+      pit_inspection=None,
+      pit_required_for_safe_path=True,
+    ),
+  )
+
+
 def _build_read_side_close_proof_points(
   scenarios: Tuple[SprintCloseScenarioResult, ...],
 ) -> Tuple[SprintCloseProofPoint, ...]:
@@ -891,6 +1115,86 @@ def _build_read_side_close_proof_points(
   )
 
 
+def _build_safe_path_close_proof_points(
+  scenarios: Tuple[SprintCloseScenarioResult, ...],
+) -> Tuple[SprintCloseProofPoint, ...]:
+  """Return proof points for the FS4-07 safe-path closeout suite."""
+
+  scenario_map = {scenario.scenario_id: scenario for scenario in scenarios}
+  read_pit_required = scenario_map['read-pit-required-review']
+  load_package_required = scenario_map['load-package-required-review']
+  safe_path_ready = scenario_map['safe-path-ready-review']
+  runtime_complete = scenario_map['safe-path-runtime-complete']
+  pit_mismatch = scenario_map['pit-mismatch-block-review']
+  fallback_boundary = scenario_map['fastboot-fallback-boundary-review']
+
+  deck_progression = (
+    _action_state(read_pit_required, 'Detect device') == 'completed'
+    and _action_state(read_pit_required, 'Read PIT') == 'next'
+    and _action_state(read_pit_required, 'Load package') == 'unavailable'
+    and _action_state(load_package_required, 'Read PIT') == 'completed'
+    and _action_state(load_package_required, 'Load package') == 'next'
+    and _action_state(safe_path_ready, 'Load package') == 'completed'
+    and _action_state(safe_path_ready, 'Execute flash plan') == 'next'
+    and _action_state(runtime_complete, 'Execute flash plan') == 'completed'
+    and _action_state(runtime_complete, 'Export evidence') == 'next'
+  )
+  pit_gating_holds = (
+    read_pit_required.gate_label == 'Gate Blocked'
+    and safe_path_ready.gate_label == 'Gate Ready'
+    and pit_mismatch.gate_label == 'Gate Blocked'
+    and _action_state(pit_mismatch, 'Execute flash plan') == 'unavailable'
+  )
+  delegated_safe_path_holds = (
+    safe_path_ready.phase_label == 'Ready to Execute'
+    and safe_path_ready.gate_label == 'Gate Ready'
+    and safe_path_ready.transport_state == 'not_invoked'
+    and safe_path_ready.live_source == 'heimdall'
+    and safe_path_ready.pit_package_alignment == 'matched'
+  )
+  runtime_evidence_handoff = (
+    runtime_complete.transport_state == 'completed'
+    and runtime_complete.phase_label == 'Completed'
+    and runtime_complete.gate_label == 'Gate Ready'
+    and runtime_complete.transcript_preserved
+    and _action_state(runtime_complete, 'Export evidence') == 'next'
+  )
+  fallback_boundaries_hold = (
+    fallback_boundary.live_source == 'fastboot'
+    and fallback_boundary.live_fallback_posture == 'engaged'
+    and _action_state(fallback_boundary, 'Read PIT') == 'unavailable'
+    and fallback_boundary.transport_state == 'not_invoked'
+  )
+
+  return (
+    SprintCloseProofPoint(
+      label='The safe-path deck progresses honestly from detect through export',
+      passed=deck_progression,
+      summary='Integrated scenarios prove Detect device, Read PIT, Load package, Execute flash plan, and Export evidence advance in the documented order without a permanent resume stage.',
+    ),
+    SprintCloseProofPoint(
+      label='Missing or mismatched PIT truth keeps the bounded lane blocked',
+      passed=pit_gating_holds,
+      summary='Read-PIT-required and PIT-mismatch scenarios stay blocked while the ready review stays Gate Ready only after matched PIT truth is present.',
+    ),
+    SprintCloseProofPoint(
+      label='The ready review remains one bounded safe-path candidate with delegated lower transport',
+      passed=delegated_safe_path_holds,
+      summary='The ready scenario reaches Ready to Execute with Heimdall still explicit as a delegated lower transport rather than a widened native claim.',
+    ),
+    SprintCloseProofPoint(
+      label='Resolved runtime hands off to exportable evidence and preserved transcript artifacts',
+      passed=runtime_evidence_handoff,
+      summary='The completed runtime scenario keeps execute marked complete, export marked next, and the bounded transcript preserved for closeout review.',
+    ),
+    SprintCloseProofPoint(
+      label='Fallback boundaries remain explicit when PIT-capable truth is absent',
+      passed=fallback_boundaries_hold,
+      summary='Fastboot fallback review stays visibly engaged and does not pretend that PIT or bounded safe-path execution is currently available.',
+    ),
+  )
+
+
 def _ready_adb_live_detection():
   """Return one deterministic ready ADB live-detection snapshot with info."""
 
@@ -926,6 +1230,19 @@ def _ready_adb_live_detection():
   return apply_live_device_info_trace(
     build_live_detection_session(detection_trace),
     info_trace,
+  )
+
+
+def _ready_heimdall_live_detection():
+  """Return one deterministic Heimdall download-mode detection snapshot."""
+
+  return build_heimdall_live_detection_session(
+    normalize_heimdall_result(
+      build_detect_device_command_plan(),
+      load_heimdall_process_fixture('detect-ready'),
+    ),
+    source_labels=('adb', 'fastboot', 'heimdall'),
+    treat_missing_device_as_cleared=True,
   )
 
 
@@ -974,6 +1291,8 @@ def _ready_pit_inspection(
 
 
 def _bundle_heading(bundle: SprintCloseBundle) -> str:
+  if bundle.suite_name == SAFE_PATH_CLOSE_SUITE_NAME:
+    return '## Calamum Vulcan FS4-07 safe-path-close bundle'
   if bundle.suite_name == 'read-side-close':
     return '## Calamum Vulcan FS3-07 read-side-close bundle'
   if bundle.suite_name == 'orchestration-close':
@@ -982,6 +1301,8 @@ def _bundle_heading(bundle: SprintCloseBundle) -> str:
 
 
 def _carry_forward_heading(bundle: SprintCloseBundle) -> str:
+  if bundle.suite_name == SAFE_PATH_CLOSE_SUITE_NAME:
+    return '### Carry-forward debt into 0.5.0'
   if bundle.suite_name == 'read-side-close':
     return '### Carry-forward debt into 0.4.0'
   if bundle.suite_name == 'orchestration-close':
@@ -992,6 +1313,18 @@ def _carry_forward_heading(bundle: SprintCloseBundle) -> str:
 def _bundle_id(captured_at_utc: str, prefix: str = 'cv-fs08-sprint-close') -> str:
   stamp = captured_at_utc.replace(':', '').replace('-', '').replace('T', '-').replace('Z', '')
   return '{prefix}-{stamp}'.format(prefix=prefix, stamp=stamp)
+
+
+def _action_state(
+  scenario: SprintCloseScenarioResult,
+  label: str,
+) -> str:
+  """Return the recorded action state for one scenario/control label pair."""
+
+  for action_label, state in scenario.action_states:
+    if action_label == label:
+      return state
+  return 'hidden'
 
 
 def _utc_now() -> str:

@@ -265,11 +265,18 @@ def _parse_fastboot_devices(
     parts = stripped.split()
     if len(parts) < 2:
       continue
+    detail_map = _parse_key_value_tokens(parts[2:])
+    transport = 'usb'
+    if ':' in parts[0]:
+      transport = 'tcpip'
     devices.append(
       AndroidDeviceRecord(
         serial=parts[0],
         state=parts[1],
-        transport='usb',
+        transport=transport,
+        product=detail_map.get('product'),
+        model=detail_map.get('model'),
+        device=detail_map.get('device'),
       )
     )
   return tuple(devices)

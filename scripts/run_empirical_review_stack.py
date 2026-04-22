@@ -200,6 +200,7 @@ def _capture_gui_mode(
   with _installed_import_context(installed_root):
     from calamum_vulcan.app.demo import build_demo_adapter_session
     from calamum_vulcan.app.demo import build_demo_package_assessment
+    from calamum_vulcan.app.demo import build_demo_pit_inspection
     from calamum_vulcan.app.demo import build_demo_session
     from calamum_vulcan.app.demo import scenario_label
     from calamum_vulcan.app.qt_shell import ShellWindow
@@ -224,20 +225,29 @@ def _capture_gui_mode(
           session=session,
           package_fixture_name=package_fixture,
         )
+    pit_inspection = build_demo_pit_inspection(
+      scenario,
+      session=session,
+      package_assessment=package_assessment,
+    )
 
     report = build_session_evidence_report(
       session,
       scenario_name=scenario_label(scenario),
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
       transport_trace=transport_trace,
       captured_at_utc=captured_at_utc,
+      pit_required_for_safe_path=True,
     )
     model = build_shell_view_model(
       session,
       scenario_name=scenario_label(scenario),
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
       transport_trace=transport_trace,
       session_report=report,
+      pit_required_for_safe_path=True,
     )
 
     screenshot_output.parent.mkdir(parents=True, exist_ok=True)
@@ -371,7 +381,7 @@ def _write_summary_markdown(
     '',
     '- wheel: `{wheel}`'.format(wheel=wheel_path.name),
     '- install root: `{root}`'.format(root=install_root),
-    '- quickstart: installed help, ready describe-only, and sprint-close bundle all passed',
+    '- quickstart: installed help, ready describe-only, sprint-close bundle, and safe-path-close bundle all passed',
     '- evidence review: blocked and failure Markdown exports remained readable and recovery-oriented',
     '- GUI review: screenshots captured for ready, blocked, and failure packaged scenarios',
     '',
@@ -461,6 +471,29 @@ def _run_empirical_review() -> int:
     sprint_close_markdown,
     'Calamum Vulcan FS-08 sprint-close bundle',
     'Installed sprint-close bundle lost the expected heading.',
+  )
+
+  safe_path_close_path = ARCHIVE_ROOT / 'safe_path_close_bundle.md'
+  _run_cli_probe(
+    script_path,
+    install_root,
+    workdir,
+    [
+      '--integration-suite',
+      'safe-path-close',
+      '--suite-format',
+      'markdown',
+      '--suite-output',
+      str(safe_path_close_path),
+      '--captured-at-utc',
+      FIXED_CAPTURED_AT_UTC,
+    ],
+  )
+  safe_path_close_markdown = safe_path_close_path.read_text(encoding='utf-8')
+  _assert_contains(
+    safe_path_close_markdown,
+    'Calamum Vulcan FS4-07 safe-path-close bundle',
+    'Installed safe-path-close bundle lost the expected heading.',
   )
 
   blocked_evidence_path = ARCHIVE_ROOT / 'evidence' / 'blocked_review.md'

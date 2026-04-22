@@ -234,6 +234,7 @@ def main() -> int:
     '--export-evidence',
     '--package-fixture',
     '--package-archive',
+    '--execute-flash-plan',
   ):
     if expected_flag not in help_text:
       raise SystemExit('Help output is missing expected flag: {flag}'.format(flag=expected_flag))
@@ -385,6 +386,53 @@ def main() -> int:
   if 'USB transfer timeout during partition write' not in transcript_text:
     raise SystemExit('Installed runtime transcript artifact lost the normalized failure reason.')
 
+  execute_evidence_path = output_dir / 'execute_safe_path_evidence.json'
+  execute_result = _run(
+    [
+      sys.executable,
+      '-c', _cli_probe_code(install_root),
+      '--execute-flash-plan',
+      '--transport-source', 'heimdall-adapter',
+      '--scenario', 'ready',
+      '--control-format', 'json',
+      '--export-evidence',
+      '--evidence-format', 'json',
+      '--evidence-output', str(execute_evidence_path),
+    ],
+    cwd=work_dir,
+  )
+  if '"execution_allowed": true' not in execute_result.stdout.lower():
+    raise SystemExit('Installed execute lane did not report execution_allowed=true for the ready safe-path scenario.')
+  execute_payload = _read_json(execute_evidence_path)
+  if execute_payload['transport']['state'] != 'completed':
+    raise SystemExit('Installed execute evidence did not preserve the completed transport state.')
+  if execute_payload['authority']['ownership'] != 'delegated':
+    raise SystemExit('Installed execute evidence did not preserve delegated transport ownership.')
+  if not any(
+    '[SAFE-PATH] governance=platform_supervised' in line
+    for line in execute_payload['log_lines']
+  ):
+    raise SystemExit('Installed execute evidence did not preserve the safe-path governance log line.')
+
+  blocked_execute_result = _run(
+    [
+      sys.executable,
+      '-c', _cli_probe_code(install_root),
+      '--execute-flash-plan',
+      '--transport-source', 'heimdall-adapter',
+      '--scenario', 'blocked',
+      '--control-format', 'json',
+    ],
+    cwd=work_dir,
+  )
+  blocked_execute_payload = json.loads(blocked_execute_result.stdout)
+  if blocked_execute_payload['execution_allowed'] is not False:
+    raise SystemExit('Installed blocked execute lane did not preserve execution_allowed=false.')
+  if blocked_execute_payload['transport']['state'] != 'not_invoked':
+    raise SystemExit('Installed blocked execute lane did not preserve the not-invoked transport state.')
+  if not blocked_execute_payload['execution_rejected']:
+    raise SystemExit('Installed blocked execute lane did not preserve the rejection reason.')
+
   bundle_path = output_dir / 'sprint_close_bundle.json'
   _run(
     [
@@ -457,6 +505,41 @@ def main() -> int:
   if fallback_exhausted is None or fallback_exhausted['inspection_posture'] != 'failed':
     raise SystemExit('Installed read-side-close bundle did not preserve the exhausted fallback failure lane.')
 
+  safe_path_bundle_path = output_dir / 'safe_path_close_bundle.json'
+  _run(
+    [
+      sys.executable,
+      '-c', _cli_probe_code(install_root),
+      '--integration-suite', 'safe-path-close',
+      '--suite-format', 'json',
+      '--suite-output', str(safe_path_bundle_path),
+    ],
+    cwd=work_dir,
+  )
+  safe_path_bundle = _read_json(safe_path_bundle_path)
+  if safe_path_bundle['suite_name'] != 'safe-path-close':
+    raise SystemExit('Installed safe-path-close bundle lost the expected suite name.')
+  safe_path_map = {
+    scenario['scenario_id']: scenario for scenario in safe_path_bundle['scenarios']
+  }
+  read_pit_required = safe_path_map.get('read-pit-required-review')
+  ready_review = safe_path_map.get('safe-path-ready-review')
+  runtime_complete = safe_path_map.get('safe-path-runtime-complete')
+  mismatch_review = safe_path_map.get('pit-mismatch-block-review')
+  fallback_boundary = safe_path_map.get('fastboot-fallback-boundary-review')
+  if read_pit_required is None or read_pit_required['gate_label'] != 'Gate Blocked':
+    raise SystemExit('Installed safe-path-close bundle did not preserve the read-PIT-required blocked review.')
+  if ready_review is None or ready_review['live_source'] != 'heimdall':
+    raise SystemExit('Installed safe-path-close bundle did not preserve the Heimdall-backed ready review.')
+  if dict(ready_review['action_states']).get('Execute flash plan') != 'next':
+    raise SystemExit('Installed safe-path-close bundle did not preserve the truthful execute-next deck state.')
+  if runtime_complete is None or dict(runtime_complete['action_states']).get('Export evidence') != 'next':
+    raise SystemExit('Installed safe-path-close bundle did not preserve the export-next runtime closeout handoff.')
+  if mismatch_review is None or mismatch_review['pit_package_alignment'] != 'mismatched':
+    raise SystemExit('Installed safe-path-close bundle did not preserve the PIT mismatch blocking review.')
+  if fallback_boundary is None or fallback_boundary['live_source'] != 'fastboot':
+    raise SystemExit('Installed safe-path-close bundle did not preserve the fastboot fallback boundary review.')
+
   security_summary = run_security_validation_suite(REPO_ROOT)
   write_security_validation_artifacts(
     VALIDATION_ROOT / 'security_validation',
@@ -479,6 +562,7 @@ def main() -> int:
       'gui_entrypoint="passed"',
       'archive_package_review="passed"',
       'suspicious_review="passed"',
+      'safe_path_execute="passed"',
       'evidence_export="passed"',
       'integration_bundle="passed"',
       'read_side_close_bundle="passed"',

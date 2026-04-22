@@ -8,9 +8,12 @@ from enum import Enum
 from typing import Any
 from typing import Dict
 from typing import Optional
+from typing import TYPE_CHECKING
 from typing import Tuple
 
-from calamum_vulcan.domain.live_device import LiveDetectionSession
+
+if TYPE_CHECKING:
+  from calamum_vulcan.domain.live_device.model import LiveDetectionSession
 
 
 class SessionPhase(str, Enum):
@@ -117,6 +120,14 @@ class InspectionWorkflow:
   captured_at_utc: Optional[str] = None
 
 
+def _default_live_detection_session() -> 'LiveDetectionSession':
+  """Lazily build the default unhydrated live-detection session."""
+
+  from calamum_vulcan.domain.live_device.model import LiveDetectionSession
+
+  return LiveDetectionSession.unhydrated()
+
+
 @dataclass(frozen=True)
 class PlatformSession:
   """The immutable session snapshot consumed by the future GUI shell."""
@@ -128,8 +139,8 @@ class PlatformSession:
   package_id: Optional[str] = None
   package_risk: Optional[str] = None
   mode: Optional[str] = None
-  live_detection: LiveDetectionSession = field(
-    default_factory=LiveDetectionSession.unhydrated
+  live_detection: 'LiveDetectionSession' = field(
+    default_factory=_default_live_detection_session
   )
   inspection: InspectionWorkflow = field(default_factory=InspectionWorkflow)
   failure_reason: Optional[str] = None

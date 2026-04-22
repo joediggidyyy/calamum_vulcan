@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Tuple
 
-from calamum_vulcan.domain.state import PlatformEvent
+from calamum_vulcan.domain.state.model import PlatformEvent
 
 
 class HeimdallCapability(str, Enum):

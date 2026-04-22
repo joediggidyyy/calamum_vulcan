@@ -21,16 +21,17 @@ from calamum_vulcan.domain.flash_plan import build_reviewed_flash_plan
 from calamum_vulcan.domain.live_device import LiveDeviceInfoState
 from calamum_vulcan.domain.live_device import LiveDetectionState
 from calamum_vulcan.domain.package import PackageManifestAssessment
-from calamum_vulcan.domain.package import preflight_overrides_from_package_assessment
+from calamum_vulcan.domain.pit import PitDeviceAlignment
 from calamum_vulcan.domain.pit import PitInspection
 from calamum_vulcan.domain.pit import PitInspectionState
 from calamum_vulcan.domain.pit import PitPackageAlignment
-from calamum_vulcan.domain.preflight import PreflightInput
 from calamum_vulcan.domain.preflight import PreflightReport
 from calamum_vulcan.domain.preflight import PreflightSeverity
 from calamum_vulcan.domain.preflight import evaluate_preflight
+from calamum_vulcan.domain.preflight import preflight_input_from_review_context
 from calamum_vulcan.domain.state import PlatformSession
 from calamum_vulcan.domain.state import SessionPhase
+from calamum_vulcan.domain.state import build_session_authority_snapshot
 from calamum_vulcan.domain.state.model import InspectionWorkflowPosture
 
 from .model import DeviceEvidence
@@ -39,12 +40,14 @@ from .model import FlashPlanEvidence
 from .model import HostEnvironmentEvidence
 from .model import InspectionWorkflowEvidence
 from .model import LiveDeviceEvidence
+from .model import LivePathIdentityEvidence
 from .model import OutcomeEvidence
 from .model import PackageEvidence
 from .model import PitEvidence
 from .model import PreflightEvidence
 from .model import REPORT_EXPORT_TARGETS
 from .model import REPORT_SCHEMA_VERSION
+from .model import SessionAuthorityEvidence
 from .model import SessionEvidenceReport
 from .model import TranscriptEvidence
 from .model import TransportEvidence
@@ -62,12 +65,18 @@ def build_session_evidence_report(
   pit_inspection: Optional[PitInspection] = None,
   transport_trace: Optional[HeimdallNormalizedTrace] = None,
   captured_at_utc: Optional[str] = None,
+  pit_required_for_safe_path: bool = False,
 ) -> SessionEvidenceReport:
   """Build one structured evidence bundle for the current shell session."""
 
   report = preflight_report
   if report is None:
-    report = _build_preflight_report(session, package_assessment)
+    report = _build_preflight_report(
+      session,
+      package_assessment,
+      pit_inspection,
+      pit_required_for_safe_path=pit_required_for_safe_path,
+    )
   reviewed_flash_plan = None  # type: Optional[ReviewedFlashPlan]
   if package_assessment is not None:
     reviewed_flash_plan = build_reviewed_flash_plan(package_assessment)
@@ -83,6 +92,13 @@ def build_session_evidence_report(
     ),
     platform=platform.system().lower(),
     execution_posture='fixture_first_adapter_late',
+  )
+  authority = _build_session_authority_evidence(
+    session,
+    report,
+    package_assessment,
+    pit_inspection,
+    pit_required_for_safe_path=pit_required_for_safe_path,
   )
   inspection = _build_inspection_evidence(session)
   live = _build_live_device_evidence(session)
@@ -115,9 +131,17 @@ def build_session_evidence_report(
   outcome = OutcomeEvidence(
     outcome=_outcome_label(session),
     export_ready=_export_ready(session),
-    next_action=_next_action(session, report, flash_plan),
+    next_action=_next_action(
+      session,
+      report,
+      flash_plan,
+      authority,
+      pit_inspection,
+      transport_trace,
+    ),
     failure_reason=session.failure_reason,
     recovery_guidance=_recovery_guidance(
+      authority,
       session,
       report,
       package_assessment,
@@ -127,6 +151,7 @@ def build_session_evidence_report(
     ),
   )
   decision_trace = _build_decision_trace(
+    authority,
     session,
     report,
     package_assessment,
@@ -136,6 +161,7 @@ def build_session_evidence_report(
   )
   summary = _summary_for_session(session, report, outcome, flash_plan, transcript)
   log_lines = _build_log_lines(
+    authority,
     session,
     report,
     package_assessment,
@@ -158,6 +184,7 @@ def build_session_evidence_report(
     session_phase=session.phase.value,
     summary=summary,
     host=host,
+    authority=authority,
     inspection=inspection,
     device=device,
     pit=pit,
@@ -194,6 +221,34 @@ def render_session_evidence_markdown(report: SessionEvidenceReport) -> str:
     '### Summary',
     '',
     report.summary,
+    '',
+    '### Session authority',
+    '',
+    '- posture: `{posture}`'.format(posture=report.authority.posture),
+    '- reviewed phase: `{phase}` ({tone})'.format(
+      phase=report.authority.reviewed_phase_label,
+      tone=report.authority.reviewed_phase_tone,
+    ),
+    '- reviewed target label: `{phase}`'.format(
+      phase=report.authority.reviewed_target_label,
+    ),
+    '- live phase: `{phase}` ({tone})'.format(
+      phase=report.authority.live_phase_label,
+      tone=report.authority.live_phase_tone,
+    ),
+    '- selected launch path: `{path}`'.format(
+      path=report.authority.selected_launch_path_label,
+    ),
+    '- ownership: `{ownership}`'.format(
+      ownership=report.authority.ownership,
+    ),
+    '- readiness: `{readiness}`'.format(
+      readiness=report.authority.readiness,
+    ),
+    '- fallback active: `{active}`'.format(
+      active='yes' if report.authority.fallback_active else 'no',
+    ),
+    '- summary: {summary}'.format(summary=report.authority.summary),
     '',
     '### Inspection workflow',
     '',
@@ -245,11 +300,24 @@ def render_session_evidence_markdown(report: SessionEvidenceReport) -> str:
     '- live fallback posture: `{posture}`'.format(
       posture=report.device.live.fallback_posture,
     ),
+    '- live path identity: `{path}` ({ownership})'.format(
+      path=report.device.live.path_identity.path_label,
+      ownership=report.device.live.path_identity.ownership,
+    ),
+    '- live delegated label: `{label}`'.format(
+      label=report.device.live.path_identity.delegated_path_label,
+    ),
+    '- live identity confidence: `{confidence}`'.format(
+      confidence=report.device.live.path_identity.identity_confidence,
+    ),
     '- live info state: `{state}`'.format(
       state=report.device.live.info_state,
     ),
     '- live summary: {summary}'.format(
       summary=report.device.live.summary,
+    ),
+    '- live path summary: {summary}'.format(
+      summary=report.device.live.path_identity.summary,
     ),
     '',
     '### PIT inspection',
@@ -261,6 +329,9 @@ def render_session_evidence_markdown(report: SessionEvidenceReport) -> str:
     ),
     '- package alignment: `{alignment}`'.format(
       alignment=report.pit.package_alignment,
+    ),
+    '- device alignment: `{alignment}`'.format(
+      alignment=report.pit.device_alignment,
     ),
     '- observed fingerprint: `{fingerprint}`'.format(
       fingerprint=report.pit.observed_pit_fingerprint or 'unknown',
@@ -395,6 +466,14 @@ def render_session_evidence_markdown(report: SessionEvidenceReport) -> str:
     lines.append('- progress: `{progress}`'.format(
       progress=', '.join(report.transport.progress_markers),
     ))
+  if report.authority.block_reason:
+    lines.append('- authority block reason: {reason}'.format(
+      reason=report.authority.block_reason,
+    ))
+  if report.authority.refresh_reason:
+    lines.append('- authority refresh: {reason}'.format(
+      reason=report.authority.refresh_reason,
+    ))
   for boundary in report.inspection.action_boundaries:
     lines.append('- inspection boundary: {boundary}'.format(
       boundary=boundary,
@@ -404,6 +483,10 @@ def render_session_evidence_markdown(report: SessionEvidenceReport) -> str:
   if report.device.live.source_labels:
     lines.append('- live sources considered: `{sources}`'.format(
       sources=', '.join(report.device.live.source_labels),
+    ))
+  if report.device.live.path_identity.operator_guidance:
+    lines.append('- live path guidance: {guidance}'.format(
+      guidance=report.device.live.path_identity.operator_guidance[0],
     ))
   if report.device.live.device_present:
     lines.append('- live serial: `{serial}`'.format(
@@ -561,11 +644,17 @@ def render_transport_transcript_text(
 def _build_preflight_report(
   session: PlatformSession,
   package_assessment: Optional[PackageManifestAssessment],
+  pit_inspection: Optional[PitInspection],
+  pit_required_for_safe_path: bool = False,
 ) -> PreflightReport:
-  if package_assessment is None:
-    return evaluate_preflight(PreflightInput.from_session(session))
-  overrides = preflight_overrides_from_package_assessment(package_assessment)
-  return evaluate_preflight(PreflightInput.from_session(session, **overrides))
+  return evaluate_preflight(
+    preflight_input_from_review_context(
+      session,
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      pit_required=pit_required_for_safe_path,
+    )
+  )
 
 
 def _build_inspection_evidence(
@@ -583,6 +672,43 @@ def _build_inspection_evidence(
     action_boundaries=inspection.action_boundaries,
     notes=inspection.notes,
     captured_at_utc=inspection.captured_at_utc,
+  )
+
+
+def _build_session_authority_evidence(
+  session: PlatformSession,
+  preflight_report: PreflightReport,
+  package_assessment: Optional[PackageManifestAssessment],
+  pit_inspection: Optional[PitInspection],
+  pit_required_for_safe_path: bool = False,
+) -> SessionAuthorityEvidence:
+  """Build the exported session-authority evidence surface."""
+
+  authority = build_session_authority_snapshot(
+    session,
+    preflight_report=preflight_report,
+    package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
+    pit_required_for_safe_path=pit_required_for_safe_path,
+  )
+  return SessionAuthorityEvidence(
+    schema_version=authority.schema_version,
+    posture=authority.posture.value,
+    reviewed_phase=authority.reviewed_phase,
+    reviewed_phase_label=authority.reviewed_phase_label,
+    reviewed_target_label=authority.reviewed_target_label,
+    reviewed_phase_tone=authority.reviewed_phase_tone,
+    live_phase_label=authority.live_phase_label,
+    live_phase_tone=authority.live_phase_tone,
+    selected_launch_path=authority.selected_launch_path.value,
+    selected_launch_path_label=authority.selected_launch_path_label,
+    ownership=authority.ownership.value,
+    readiness=authority.readiness.value,
+    fallback_active=authority.fallback_active,
+    block_reason=authority.block_reason,
+    refresh_state=authority.refresh_state.value,
+    refresh_reason=authority.refresh_reason,
+    summary=authority.summary,
   )
 
 
@@ -701,6 +827,7 @@ def _build_live_device_evidence(
       if live_detection.source is not None
       else None
     ),
+    path_identity=_build_live_path_identity_evidence(session),
     source_labels=live_detection.source_labels,
     fallback_posture=live_detection.fallback_posture.value,
     fallback_reason=live_detection.fallback_reason,
@@ -747,6 +874,24 @@ def _build_live_device_evidence(
     capability_hints=snapshot.capability_hints if snapshot is not None else (),
     operator_guidance=snapshot.operator_guidance if snapshot is not None else (),
     notes=live_detection.notes,
+  )
+
+
+def _build_live_path_identity_evidence(
+  session: PlatformSession,
+) -> LivePathIdentityEvidence:
+  """Build the exported live-path identity surface."""
+
+  path_identity = session.live_detection.path_identity
+  return LivePathIdentityEvidence(
+    schema_version=path_identity.schema_version,
+    ownership=path_identity.ownership.value,
+    path_label=path_identity.path_label,
+    delegated_path_label=path_identity.delegated_path_label,
+    mode_label=path_identity.mode_label,
+    identity_confidence=path_identity.identity_confidence.value,
+    summary=path_identity.summary,
+    operator_guidance=path_identity.operator_guidance,
   )
 
 
@@ -889,6 +1034,7 @@ def _export_ready(session: PlatformSession) -> bool:
     session.last_event is not None
     or session.guards.has_device
     or session.guards.package_loaded
+    or session.live_detection.state != LiveDetectionState.UNHYDRATED
   )
 
 
@@ -896,24 +1042,58 @@ def _next_action(
   session: PlatformSession,
   report: PreflightReport,
   flash_plan: FlashPlanEvidence,
+  authority: SessionAuthorityEvidence,
+  pit_inspection: Optional[PitInspection],
+  transport_trace: Optional[HeimdallNormalizedTrace],
 ) -> str:
+  if session.phase == SessionPhase.RESUME_NEEDED or (
+    transport_trace is not None
+    and transport_trace.state == HeimdallTraceState.RESUME_NEEDED
+  ):
+    return 'Complete the manual recovery step, then use Continue after recovery before exporting final evidence.'
+  if session.phase == SessionPhase.COMPLETED:
+    return 'Export evidence and the bounded transport transcript for closeout review.'
+  if session.phase == SessionPhase.FAILED:
+    return 'Export evidence, review the failure transcript, and only then decide whether to retry.'
   if session.inspection.posture != InspectionWorkflowPosture.UNINSPECTED:
     return session.inspection.next_action
-  if session.phase == SessionPhase.FAILED:
-    return 'Review normalized failure evidence before attempting any retry.'
-  if session.phase == SessionPhase.RESUME_NEEDED:
-    return 'Complete the manual resume step before transport continues.'
+  if session.live_detection.state == LiveDetectionState.UNHYDRATED:
+    return 'Run Detect device to establish current Samsung mode and live identity.'
+  if _pit_read_is_next(session, pit_inspection):
+    return 'Run Read PIT to capture bounded partition truth before widening package or execute claims.'
+  if flash_plan.package_id == 'awaiting-package':
+    return 'Load a reviewed package before bounded safe-path planning can continue.'
   if report.gate == report.gate.BLOCKED:
     return report.recommended_action
   if report.gate == report.gate.WARN:
-    return 'Resolve or acknowledge the warning findings before execution.'
+    return 'Resolve or acknowledge warning findings before the bounded safe-path lane can open.'
   if not flash_plan.ready_for_transport:
     return 'Resolve the reviewed flash-plan blockers before any transport command is generated.'
   if session.phase == SessionPhase.READY_TO_EXECUTE:
     if flash_plan.suspicious_warning_count:
-      return 'Review the acknowledged suspicious-trait warnings, flash plan, and separated execute control before transport.'
-    return 'Review the reviewed flash plan, recovery guidance, and separated execute control before transport.'
+      return 'Review the bounded flash plan, suspicious-trait warnings, and execute control before transport.'
+    return 'Review the bounded flash plan, recovery guidance, and execute control before transport.'
+  if authority.readiness == 'narrowed':
+    return 'Keep the current safe-path claim narrow until live, PIT, or package truth becomes explicit enough to proceed.'
+  if _export_ready(session):
+    return 'Export evidence for the current review state or continue the next bounded step.'
   return 'Continue the fixture-driven review path and preserve the evidence trail.'
+
+
+def _pit_read_is_next(
+  session: PlatformSession,
+  pit_inspection: Optional[PitInspection],
+) -> bool:
+  """Return whether bounded PIT capture is the next honest deck step."""
+
+  snapshot = session.live_detection.snapshot
+  if snapshot is None or snapshot.source.value != 'heimdall' or not snapshot.command_ready:
+    return False
+  if pit_inspection is None:
+    return True
+  if pit_inspection.state != PitInspectionState.CAPTURED:
+    return True
+  return pit_inspection.device_alignment == PitDeviceAlignment.NOT_PROVIDED
 
 
 def _summary_for_session(
@@ -951,6 +1131,7 @@ def _summary_for_session(
 
 
 def _recovery_guidance(
+  authority: SessionAuthorityEvidence,
   session: PlatformSession,
   report: PreflightReport,
   package_assessment: Optional[PackageManifestAssessment],
@@ -960,6 +1141,16 @@ def _recovery_guidance(
 ) -> Tuple[str, ...]:
   guidance = []
   device_resolution = resolve_device_profile(session.product_code)
+  path_identity = session.live_detection.path_identity
+  if authority.block_reason is not None:
+    guidance.append(authority.block_reason)
+  if authority.refresh_reason is not None:
+    guidance.append(authority.refresh_reason)
+  if (
+    path_identity.ownership.value in ('delegated', 'fallback')
+    and path_identity.operator_guidance
+  ):
+    guidance.append(path_identity.operator_guidance[0])
   if session.phase == SessionPhase.FAILED:
     guidance.append('Stabilize the direct USB path before any retry attempt.')
     guidance.append('Re-run the package and preflight review before restarting transport.')
@@ -992,6 +1183,8 @@ def _recovery_guidance(
       PitInspectionState.FAILED,
     ):
       guidance.append('Do not treat the current PIT inspection as trustworthy until the PIT parser and acquisition path are healthy again.')
+    elif pit_inspection.device_alignment == PitDeviceAlignment.MISMATCHED:
+      guidance.append('Do not proceed until the observed PIT product code agrees with the current session device identity.')
     elif pit_inspection.package_alignment == PitPackageAlignment.MISMATCHED:
       guidance.append('Do not proceed until the reviewed package PIT fingerprint matches the observed device PIT.')
     elif pit_inspection.state == PitInspectionState.PARTIAL:
@@ -1012,6 +1205,7 @@ def _recovery_guidance(
 
 
 def _build_decision_trace(
+  authority: SessionAuthorityEvidence,
   session: PlatformSession,
   report: PreflightReport,
   package_assessment: Optional[PackageManifestAssessment],
@@ -1025,6 +1219,12 @@ def _build_decision_trace(
       label='Session phase',
       summary=session.phase.value,
       severity='info',
+    ),
+    DecisionTraceEntry(
+      source='authority',
+      label='Launch path authority',
+      summary=authority.summary,
+      severity=_authority_severity(authority),
     ),
     DecisionTraceEntry(
       source='preflight',
@@ -1065,6 +1265,15 @@ def _build_decision_trace(
         severity=live_severity,
       )
     )
+    if session.live_detection.path_identity.ownership.value != 'none':
+      trace.append(
+        DecisionTraceEntry(
+          source='live_path',
+          label='Live path identity',
+          summary=session.live_detection.path_identity.summary,
+          severity=_live_path_severity(session.live_detection.path_identity),
+        )
+      )
     if (
       session.live_detection.snapshot is not None
       and session.live_detection.snapshot.info_state != LiveDeviceInfoState.NOT_COLLECTED
@@ -1092,7 +1301,18 @@ def _build_decision_trace(
       PitInspectionState.FAILED,
     ):
       pit_severity = 'danger'
+    elif pit_inspection.device_alignment == PitDeviceAlignment.MISMATCHED:
+      pit_severity = 'danger'
+    elif pit_inspection.package_alignment == PitPackageAlignment.MISMATCHED:
+      pit_severity = 'danger'
     elif pit_inspection.state == PitInspectionState.PARTIAL:
+      pit_severity = 'warning'
+    elif pit_inspection.device_alignment == PitDeviceAlignment.NOT_PROVIDED:
+      pit_severity = 'warning'
+    elif pit_inspection.package_alignment in (
+      PitPackageAlignment.MISSING_REVIEWED,
+      PitPackageAlignment.MISSING_OBSERVED,
+    ):
       pit_severity = 'warning'
     elif pit_inspection.package_alignment == PitPackageAlignment.MATCHED:
       pit_severity = 'success'
@@ -1110,6 +1330,15 @@ def _build_decision_trace(
           source='pit',
           label='PIT/package alignment',
           summary='Observed PIT fingerprint does not match the reviewed package fingerprint.',
+          severity='danger',
+        )
+      )
+    if pit_inspection.device_alignment == PitDeviceAlignment.MISMATCHED:
+      trace.append(
+        DecisionTraceEntry(
+          source='pit',
+          label='PIT/device alignment',
+          summary='Observed PIT product code does not match the current session device identity.',
           severity='danger',
         )
       )
@@ -1232,6 +1461,7 @@ def _build_decision_trace(
 
 
 def _build_log_lines(
+  authority: SessionAuthorityEvidence,
   session: PlatformSession,
   report: PreflightReport,
   package_assessment: Optional[PackageManifestAssessment],
@@ -1252,11 +1482,23 @@ def _build_log_lines(
       captured=captured_at_utc,
     ),
     '[SESSION] Calamum Vulcan shell bound to platform-owned state.',
+    '[AUTHORITY] posture={posture} path={path} ownership={ownership} readiness={readiness} fallback={fallback}'.format(
+      posture=authority.posture,
+      path=authority.selected_launch_path,
+      ownership=authority.ownership,
+      readiness=authority.readiness,
+      fallback='yes' if authority.fallback_active else 'no',
+    ),
+    '[AUTHORITY-SUMMARY] {summary}'.format(summary=authority.summary),
     '[PHASE] {phase}'.format(phase=session.phase.value),
     '[GATE] {gate}'.format(gate=report.gate.value),
     '[DEVICE] {device}'.format(device=session.product_code or 'Awaiting device'),
     '[PACKAGE] {package}'.format(package=session.package_id or 'Awaiting package'),
   ]
+  if authority.block_reason is not None:
+    lines.append('[AUTHORITY-BLOCK] {reason}'.format(reason=authority.block_reason))
+  if authority.refresh_reason is not None:
+    lines.append('[AUTHORITY-REFRESH] {reason}'.format(reason=authority.refresh_reason))
   if session.guards.has_device:
     lines.append(
       '[DEVICE-REGISTRY] match={match} canonical={canonical} name={name}'.format(
@@ -1280,6 +1522,20 @@ def _build_log_lines(
     lines.append('[LIVE-SUMMARY] {summary}'.format(
       summary=session.live_detection.summary,
     ))
+    lines.append(
+      '[LIVE-PATH] ownership={ownership} label="{label}" delegated="{delegated}" confidence={confidence}'.format(
+        ownership=session.live_detection.path_identity.ownership.value,
+        label=session.live_detection.path_identity.path_label,
+        delegated=session.live_detection.path_identity.delegated_path_label,
+        confidence=session.live_detection.path_identity.identity_confidence.value,
+      )
+    )
+    if session.live_detection.path_identity.operator_guidance:
+      lines.append(
+        '[LIVE-PATH-GUIDANCE] {guidance}'.format(
+          guidance=session.live_detection.path_identity.operator_guidance[0],
+        )
+      )
     if session.live_detection.snapshot is not None:
       lines.append(
         '[LIVE-IDENTITY] serial={serial} product={product} mode={mode} support={support}'.format(
@@ -1320,11 +1576,12 @@ def _build_log_lines(
 
   if pit_inspection is not None:
     lines.append(
-      '[PIT] state={state} source={source} entries={entries} package_alignment={alignment}'.format(
+      '[PIT] state={state} source={source} entries={entries} package_alignment={package_alignment} device_alignment={device_alignment}'.format(
         state=pit_inspection.state.value,
         source=(pit_inspection.source.value if pit_inspection.source is not None else 'none'),
         entries=pit_inspection.entry_count,
-        alignment=pit_inspection.package_alignment.value,
+        package_alignment=pit_inspection.package_alignment.value,
+        device_alignment=pit_inspection.device_alignment.value,
       )
     )
     lines.append('[PIT-SUMMARY] {summary}'.format(summary=pit_inspection.summary))
@@ -1419,6 +1676,10 @@ def _build_log_lines(
         exit_code=transport_trace.exit_code,
       )
     )
+    if transport_trace.command_plan.capability.value == 'flash_package':
+      lines.append(
+        '[SAFE-PATH] governance=platform_supervised lane=bounded_reviewed_flash_session lower_transport=heimdall'.format()
+      )
     lines.append('[COMMAND] {command}'.format(
       command=transport_trace.command_plan.display_command,
     ))
@@ -1495,6 +1756,34 @@ def _transport_severity(state: HeimdallTraceState) -> str:
   if state == HeimdallTraceState.RESUME_NEEDED:
     return 'warning'
   if state == HeimdallTraceState.COMPLETED:
+    return 'success'
+  return 'info'
+
+
+def _authority_severity(authority: SessionAuthorityEvidence) -> str:
+  if authority.readiness == 'blocked':
+    return 'danger'
+  if authority.readiness == 'narrowed':
+    return 'warning'
+  if authority.readiness == 'ready':
+    return 'success'
+  return 'info'
+
+
+def _live_path_severity(path_identity: object) -> str:
+  """Return one severity tier for the current live-path identity."""
+
+  ownership = getattr(getattr(path_identity, 'ownership', None), 'value', 'none')
+  confidence = getattr(
+    getattr(path_identity, 'identity_confidence', None),
+    'value',
+    'unavailable',
+  )
+  if ownership == 'fallback':
+    return 'warning'
+  if ownership == 'delegated' and confidence in ('serial_only', 'unavailable'):
+    return 'warning'
+  if ownership == 'native' and confidence == 'profiled':
     return 'success'
   return 'info'
 

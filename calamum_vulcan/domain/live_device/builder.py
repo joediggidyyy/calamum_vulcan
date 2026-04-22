@@ -10,11 +10,15 @@ from calamum_vulcan.adapters.adb_fastboot import AndroidDeviceRecord
 from calamum_vulcan.adapters.adb_fastboot import AndroidToolsNormalizedTrace
 from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
 from calamum_vulcan.adapters.adb_fastboot import AndroidToolsTraceState
+from calamum_vulcan.adapters.heimdall.model import HeimdallNormalizedTrace
 from calamum_vulcan.domain.device_registry import resolve_device_profile
 
 from .model import LiveDetectionSession
 from .model import LiveDetectionState
 from .model import LiveDeviceInfoState
+from .model import LiveIdentityConfidence
+from .model import LivePathIdentity
+from .model import LivePathOwnership
 from .model import LiveDeviceSnapshot
 from .model import LiveDeviceSource
 from .model import LiveDeviceSupportPosture
@@ -44,6 +48,12 @@ def build_live_detection_session(
       source_labels=considered_sources,
       fallback_posture=fallback_posture,
       fallback_reason=fallback_reason,
+      path_identity=_build_path_identity(
+        source,
+        fallback_posture,
+        fallback_reason,
+        detection_state=LiveDetectionState.FAILED,
+      ),
       notes=_detection_notes(
         trace.notes,
         fallback_posture,
@@ -63,6 +73,12 @@ def build_live_detection_session(
       source_labels=considered_sources,
       fallback_posture=fallback_posture,
       fallback_reason=fallback_reason,
+      path_identity=_build_path_identity(
+        source,
+        fallback_posture,
+        fallback_reason,
+        detection_state=LiveDetectionState.CLEARED,
+      ),
       notes=_detection_notes(
         trace.notes,
         fallback_posture,
@@ -90,6 +106,13 @@ def build_live_detection_session(
     fallback_posture=fallback_posture,
     fallback_reason=fallback_reason,
     snapshot=snapshot,
+    path_identity=_build_path_identity(
+      source,
+      fallback_posture,
+      fallback_reason,
+      snapshot=snapshot,
+      detection_state=detection_state,
+    ),
     notes=_detection_notes(
       trace.notes,
       fallback_posture,
@@ -98,6 +121,212 @@ def build_live_detection_session(
       detection_state,
     ),
   )
+
+
+def build_heimdall_live_detection_session(
+  trace: HeimdallNormalizedTrace,
+  source_labels: Optional[Tuple[str, ...]] = None,
+  treat_missing_device_as_cleared: bool = False,
+) -> LiveDetectionSession:
+  """Normalize one Heimdall detect trace into repo-owned live-detection truth."""
+
+  source = LiveDeviceSource.HEIMDALL
+  considered_sources = source_labels or (source.value,)
+  payload = _first_heimdall_device_payload(trace)
+  detect_classification = _heimdall_detect_classification(trace)
+
+  if payload is None:
+    detection_state = LiveDetectionState.FAILED
+    summary = trace.summary
+    if treat_missing_device_as_cleared and detect_classification == 'no_device':
+      detection_state = LiveDetectionState.CLEARED
+      summary = _heimdall_cleared_summary(considered_sources)
+    return LiveDetectionSession(
+      state=detection_state,
+      summary=summary,
+      source=source,
+      source_labels=considered_sources,
+      path_identity=_build_path_identity(
+        source,
+        LiveFallbackPosture.NOT_NEEDED,
+        None,
+        detection_state=detection_state,
+      ),
+      notes=_detection_notes(
+        trace.notes,
+        LiveFallbackPosture.NOT_NEEDED,
+        None,
+        detection_state=detection_state,
+      ),
+    )
+
+  snapshot = _build_heimdall_snapshot(payload)
+  detection_state = LiveDetectionState.DETECTED
+  if not snapshot.command_ready or _heimdall_runtime_failure(trace):
+    detection_state = LiveDetectionState.ATTENTION
+
+  return LiveDetectionSession(
+    state=detection_state,
+    summary=_compose_summary(
+      trace.summary,
+      LiveFallbackPosture.NOT_NEEDED,
+      None,
+      snapshot,
+      detection_state,
+    ),
+    source=source,
+    source_labels=considered_sources,
+    snapshot=snapshot,
+    path_identity=_build_path_identity(
+      source,
+      LiveFallbackPosture.NOT_NEEDED,
+      None,
+      snapshot=snapshot,
+      detection_state=detection_state,
+    ),
+    notes=_detection_notes(
+      trace.notes,
+      LiveFallbackPosture.NOT_NEEDED,
+      None,
+      snapshot,
+      detection_state,
+    ),
+  )
+
+
+def _first_heimdall_device_payload(
+  trace: HeimdallNormalizedTrace,
+) -> Optional[dict[str, object]]:
+  for event in trace.platform_events:
+    event_type = getattr(event.event_type, 'value', str(event.event_type))
+    if event_type != 'device_connected':
+      continue
+    payload = getattr(event, 'payload', None)
+    if isinstance(payload, dict):
+      return payload
+    if payload is not None and hasattr(payload, 'items'):
+      return dict(payload)
+  return None
+
+
+def _build_heimdall_snapshot(
+  payload: dict[str, object],
+) -> LiveDeviceSnapshot:
+  source = LiveDeviceSource.HEIMDALL
+  serial = _string_payload_value(payload, 'device_id') or 'download-mode-device'
+  connection_state = _string_payload_value(payload, 'mode') or 'download'
+  product_code = _string_payload_value(payload, 'product_code')
+  resolution = resolve_device_profile(product_code)
+  support_posture = LiveDeviceSupportPosture.IDENTITY_INCOMPLETE
+  registry_match_kind = 'unknown'
+  canonical_product_code = None
+  marketing_name = None
+
+  if product_code is not None:
+    registry_match_kind = resolution.match_kind.value
+    canonical_product_code = resolution.canonical_product_code
+    marketing_name = resolution.marketing_name
+    if resolution.known:
+      support_posture = LiveDeviceSupportPosture.SUPPORTED
+    else:
+      support_posture = LiveDeviceSupportPosture.UNPROFILED
+
+  command_ready = connection_state == 'download'
+  info_state = LiveDeviceInfoState.UNAVAILABLE
+  return LiveDeviceSnapshot(
+    source=source,
+    serial=serial,
+    connection_state=connection_state,
+    transport='download-mode',
+    mode='{source}/{state}'.format(
+      source=source.value,
+      state=connection_state,
+    ),
+    command_ready=command_ready,
+    product_code=product_code,
+    canonical_product_code=canonical_product_code,
+    marketing_name=marketing_name,
+    registry_match_kind=registry_match_kind,
+    support_posture=support_posture,
+    info_state=info_state,
+    capability_hints=_capability_hints(
+      source,
+      command_ready,
+      support_posture,
+      info_state,
+    ),
+    operator_guidance=_operator_guidance(
+      source,
+      command_ready,
+      support_posture,
+      info_state,
+    ),
+  )
+
+
+def _heimdall_runtime_failure(trace: HeimdallNormalizedTrace) -> bool:
+  classification = _heimdall_detect_classification(trace)
+  if classification == 'runtime_failure':
+    return True
+  if classification == 'no_device':
+    return False
+  if trace.exit_code in (124, 127):
+    return True
+  combined = ' '.join(trace.notes + trace.stderr_lines).lower()
+  for token in (
+    'executable',
+    'not available on path',
+    'timed out',
+    'timeout',
+    'access denied',
+    'permission denied',
+    'driver',
+    'failed to claim interface',
+    'failed to receive handshake response',
+    'protocol initialisation failed',
+    'transport warning',
+  ):
+    if token in combined:
+      return True
+  return False
+
+
+def _heimdall_detect_classification(trace: HeimdallNormalizedTrace) -> str:
+  """Return the detect classification inferred from the normalized trace summary."""
+
+  summary = trace.summary.lower()
+  if summary.startswith('heimdall did not detect a samsung download-mode device'):
+    return 'no_device'
+  if 'could not normalize a trustworthy samsung download-mode identity' in summary:
+    return 'unparsed_output'
+  if 'failed before the platform could verify samsung download-mode presence' in summary:
+    return 'runtime_failure'
+  return 'detected'
+
+
+def _heimdall_cleared_summary(source_labels: Tuple[str, ...]) -> str:
+  normalized_labels = tuple(label.lower() for label in source_labels)
+  if normalized_labels == ('adb', 'fastboot', 'heimdall'):
+    return 'No live device detected after checking ADB, fastboot, and Heimdall.'
+  if len(normalized_labels) > 1:
+    return (
+      'Heimdall did not capture a Samsung download-mode device after the '
+      'earlier live probes completed.'
+    )
+  return 'Heimdall did not capture a Samsung download-mode device.'
+
+
+def _string_payload_value(
+  payload: dict[str, object],
+  key: str,
+) -> Optional[str]:
+  value = payload.get(key)
+  if value is None:
+    return None
+  normalized = str(value).strip()
+  if not normalized:
+    return None
+  return normalized
 
 
 def _select_active_device(
@@ -252,8 +481,383 @@ def apply_live_device_info_trace(
   return replace(
     detection,
     snapshot=updated_snapshot,
+    path_identity=_build_path_identity(
+      updated_snapshot.source,
+      detection.fallback_posture,
+      detection.fallback_reason,
+      snapshot=updated_snapshot,
+      detection_state=detection.state,
+    ),
     notes=_merge_detection_notes(detection.notes, trace.notes, updated_snapshot, info_state),
   )
+
+
+def _build_path_identity(
+  source: LiveDeviceSource,
+  fallback_posture: LiveFallbackPosture,
+  fallback_reason: Optional[str],
+  snapshot: Optional[LiveDeviceSnapshot] = None,
+  detection_state: Optional[LiveDetectionState] = None,
+) -> LivePathIdentity:
+  """Build one explicit live-path identity surface for this detection state."""
+
+  ownership = _path_ownership(source, fallback_posture)
+  identity_confidence = _identity_confidence(snapshot)
+  return LivePathIdentity(
+    ownership=ownership,
+    path_label=_path_label(
+      source,
+      fallback_posture,
+      snapshot,
+      detection_state,
+    ),
+    delegated_path_label=_delegated_path_label(
+      source,
+      fallback_posture,
+      snapshot,
+      detection_state,
+    ),
+    mode_label=_path_mode_label(
+      source,
+      snapshot,
+      fallback_posture,
+      detection_state,
+    ),
+    identity_confidence=identity_confidence,
+    summary=_path_summary(
+      source,
+      fallback_posture,
+      fallback_reason,
+      snapshot,
+      detection_state,
+      identity_confidence,
+    ),
+    operator_guidance=_path_guidance(
+      source,
+      fallback_posture,
+      fallback_reason,
+      snapshot,
+      detection_state,
+      identity_confidence,
+    ),
+  )
+
+
+def _path_ownership(
+  source: LiveDeviceSource,
+  fallback_posture: LiveFallbackPosture,
+) -> LivePathOwnership:
+  """Return the explicit ownership label for one live path."""
+
+  if source == LiveDeviceSource.ADB:
+    if fallback_posture == LiveFallbackPosture.NEEDED:
+      return LivePathOwnership.DELEGATED
+    return LivePathOwnership.NATIVE
+  if source == LiveDeviceSource.HEIMDALL:
+    return LivePathOwnership.DELEGATED
+  if fallback_posture == LiveFallbackPosture.ENGAGED:
+    return LivePathOwnership.FALLBACK
+  return LivePathOwnership.DELEGATED
+
+
+def _identity_confidence(
+  snapshot: Optional[LiveDeviceSnapshot],
+) -> LiveIdentityConfidence:
+  """Return how much repo-owned identity is available for this path."""
+
+  if snapshot is None:
+    return LiveIdentityConfidence.UNAVAILABLE
+  if snapshot.support_posture == LiveDeviceSupportPosture.SUPPORTED:
+    return LiveIdentityConfidence.PROFILED
+  if (
+    snapshot.canonical_product_code is not None
+    or snapshot.product_code is not None
+    or snapshot.model_name is not None
+  ):
+    return LiveIdentityConfidence.PRODUCT_RESOLVED
+  return LiveIdentityConfidence.SERIAL_ONLY
+
+
+def _path_label(
+  source: LiveDeviceSource,
+  fallback_posture: LiveFallbackPosture,
+  snapshot: Optional[LiveDeviceSnapshot],
+  detection_state: Optional[LiveDetectionState],
+) -> str:
+  """Return one operator-facing label for the current live path."""
+
+  if snapshot is None:
+    if fallback_posture == LiveFallbackPosture.NEEDED:
+      return 'Fallback Check Pending'
+    if fallback_posture == LiveFallbackPosture.ENGAGED:
+      if detection_state == LiveDetectionState.FAILED:
+        return 'Fallback Probe Failed'
+      return 'Fallback Exhausted'
+    if detection_state == LiveDetectionState.FAILED:
+      if source == LiveDeviceSource.ADB:
+        return 'ADB Probe Failed'
+      if source == LiveDeviceSource.HEIMDALL:
+        return 'Heimdall Probe Failed'
+      return 'Fastboot Probe Failed'
+    if source == LiveDeviceSource.HEIMDALL:
+      return 'No Download-Mode Device'
+    return 'No Live Path'
+  if snapshot.source == LiveDeviceSource.ADB:
+    if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
+      return 'ADB Session Attention'
+    return 'ADB Native Session'
+  if snapshot.source == LiveDeviceSource.HEIMDALL:
+    if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
+      return 'Heimdall Download-Mode Attention'
+    return 'Heimdall Download-Mode Session'
+  if fallback_posture == LiveFallbackPosture.ENGAGED:
+    return 'Fastboot Fallback Session'
+  return 'Delegated Fastboot Session'
+
+
+def _delegated_path_label(
+  source: LiveDeviceSource,
+  fallback_posture: LiveFallbackPosture,
+  snapshot: Optional[LiveDeviceSnapshot],
+  detection_state: Optional[LiveDetectionState],
+) -> str:
+  """Return one compact delegated-path label for evidence surfaces."""
+
+  if snapshot is None:
+    if fallback_posture == LiveFallbackPosture.NEEDED:
+      return 'adb -> fastboot handoff'
+    if fallback_posture == LiveFallbackPosture.ENGAGED:
+      if detection_state == LiveDetectionState.FAILED:
+        return 'adb -> fastboot probe failed'
+      return 'adb -> fastboot exhausted'
+    if source == LiveDeviceSource.ADB:
+      return 'adb probe'
+    if source == LiveDeviceSource.HEIMDALL:
+      return 'heimdall download-mode probe'
+    return 'fastboot probe'
+  if snapshot.source == LiveDeviceSource.ADB:
+    if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
+      return 'adb attention lane'
+    return 'native adb session'
+  if snapshot.source == LiveDeviceSource.HEIMDALL:
+    if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
+      return 'heimdall download-mode attention lane'
+    return 'heimdall download-mode session'
+  if fallback_posture == LiveFallbackPosture.ENGAGED:
+    return 'adb -> fastboot fallback'
+  return 'fastboot delegated session'
+
+
+def _path_mode_label(
+  source: LiveDeviceSource,
+  snapshot: Optional[LiveDeviceSnapshot],
+  fallback_posture: LiveFallbackPosture,
+  detection_state: Optional[LiveDetectionState],
+) -> str:
+  """Return one human-readable mode-truth label for the current path."""
+
+  if snapshot is not None:
+    return snapshot.mode.replace('/', ' / ')
+  if fallback_posture == LiveFallbackPosture.NEEDED:
+    return 'awaiting fastboot identity'
+  if detection_state == LiveDetectionState.FAILED:
+    if source == LiveDeviceSource.ADB:
+      return 'adb probe failed'
+    if source == LiveDeviceSource.HEIMDALL:
+      return 'heimdall probe failed'
+    return 'fastboot probe failed'
+  if source == LiveDeviceSource.HEIMDALL:
+    return 'download-mode not detected'
+  return 'no live mode'
+
+
+def _path_summary(
+  source: LiveDeviceSource,
+  fallback_posture: LiveFallbackPosture,
+  fallback_reason: Optional[str],
+  snapshot: Optional[LiveDeviceSnapshot],
+  detection_state: Optional[LiveDetectionState],
+  identity_confidence: LiveIdentityConfidence,
+) -> str:
+  """Return one summary sentence for the current live-path identity."""
+
+  if snapshot is None:
+    if fallback_posture == LiveFallbackPosture.NEEDED:
+      return (
+        'ADB did not establish a live device yet; the next supported delegated '
+        'path is the fastboot handoff.'
+      )
+    if fallback_posture == LiveFallbackPosture.ENGAGED:
+      if detection_state == LiveDetectionState.FAILED:
+        return (
+          'The delegated fastboot fallback lane failed before a live companion '
+          'could be identified.'
+        )
+      return (
+        'Fallback review stayed explicit, but fastboot did not capture a live '
+        'companion after ADB failed to establish one.'
+      )
+    if detection_state == LiveDetectionState.FAILED:
+      if source == LiveDeviceSource.HEIMDALL:
+        return 'Heimdall detection failed before a trustworthy Samsung download-mode identity could be built.'
+      return '{source} detection failed before a trustworthy live identity could be built.'.format(
+        source=source.value.upper(),
+      )
+    if source == LiveDeviceSource.HEIMDALL:
+      return 'Heimdall did not capture a Samsung download-mode companion.'
+    return 'No live or delegated path is currently active.'
+
+  identity = _identity_label(snapshot)
+  if snapshot.source == LiveDeviceSource.ADB:
+    if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
+      return (
+        'ADB identified {identity}, but the live session still needs operator '
+        'attention before it should be treated as command-ready.'
+      ).format(identity=identity)
+    if snapshot.info_state == LiveDeviceInfoState.CAPTURED:
+      return (
+        'ADB native session resolved {identity}, and bounded ADB device info is '
+        'captured for reviewed guidance.'
+      ).format(identity=identity)
+    if snapshot.info_state == LiveDeviceInfoState.PARTIAL:
+      return (
+        'ADB native session resolved {identity}, but bounded ADB device info is '
+        'only partial.'
+      ).format(identity=identity)
+    if snapshot.info_state == LiveDeviceInfoState.FAILED:
+      return (
+        'ADB native session resolved {identity}, but bounded ADB device info '
+        'could not be captured.'
+      ).format(identity=identity)
+    return 'ADB native session resolved {identity} for repo-owned live guidance.'.format(
+      identity=identity,
+    )
+
+  if snapshot.source == LiveDeviceSource.HEIMDALL:
+    if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
+      return (
+        'Heimdall identified {identity}, but the download-mode session still '
+        'needs operator attention before it should be treated as command-ready.'
+      ).format(identity=identity)
+    if identity_confidence == LiveIdentityConfidence.SERIAL_ONLY:
+      return (
+        'Heimdall download-mode session captured serial {serial}, but current '
+        'identity is still serial-only because Heimdall did not provide a '
+        'product code.'
+      ).format(serial=snapshot.serial)
+    return (
+      'Heimdall download-mode session resolved {identity} for PIT-oriented '
+      'review while keeping the delegated Samsung download-mode lane explicit.'
+    ).format(identity=identity)
+
+  if fallback_posture == LiveFallbackPosture.ENGAGED:
+    if identity_confidence == LiveIdentityConfidence.SERIAL_ONLY:
+      return (
+        'Fastboot fallback captured serial {serial}, but current fallback '
+        'identity is still serial-only because fastboot did not provide a '
+        'product code.'
+      ).format(serial=snapshot.serial)
+    return (
+      'Fastboot fallback resolved {identity}, but the lane remains explicit '
+      'fallback guidance rather than a native-ready claim.'
+    ).format(identity=identity)
+
+  if identity_confidence == LiveIdentityConfidence.SERIAL_ONLY:
+    return (
+      'Delegated fastboot session captured serial {serial}, but current '
+      'identity is still serial-only because fastboot did not provide a '
+      'product code.'
+    ).format(serial=snapshot.serial)
+  return (
+    'Delegated fastboot session resolved {identity} while staying narrower '
+    'than a native ADB session.'
+  ).format(identity=identity)
+
+
+def _path_guidance(
+  source: LiveDeviceSource,
+  fallback_posture: LiveFallbackPosture,
+  fallback_reason: Optional[str],
+  snapshot: Optional[LiveDeviceSnapshot],
+  detection_state: Optional[LiveDetectionState],
+  identity_confidence: LiveIdentityConfidence,
+) -> Tuple[str, ...]:
+  """Return operator guidance for the current live-path identity."""
+
+  guidance = []  # type: list[str]
+  if snapshot is None:
+    if source == LiveDeviceSource.HEIMDALL:
+      if detection_state == LiveDetectionState.FAILED:
+        guidance.append(
+          'Resolve the Heimdall/download-mode detection failure before trusting Samsung download-mode identity.'
+        )
+      else:
+        guidance.append(
+          'If the device should already be in Samsung download mode, confirm the cable/driver path and rerun Detect device.'
+        )
+    elif fallback_posture == LiveFallbackPosture.NEEDED:
+      guidance.append(
+        'Treat the current lane as an ADB -> fastboot handoff only; do not infer device support until a live companion is identified.'
+      )
+    elif fallback_posture == LiveFallbackPosture.ENGAGED:
+      guidance.append(
+        'Keep fallback status explicit; do not widen the path until fastboot or ADB captures a live companion.'
+      )
+    elif detection_state == LiveDetectionState.FAILED:
+      guidance.append(
+        'Resolve the live companion tool failure before trusting any launch-path identity.'
+      )
+  elif snapshot.source == LiveDeviceSource.HEIMDALL:
+    guidance.append(
+      'Samsung download mode is present; use PIT review to gather bounded evidence before widening any safe-path claim.'
+    )
+    guidance.append(
+      'Heimdall detection does not provide the richer bounded Android property snapshot that a command-ready ADB session can capture.'
+    )
+  elif snapshot.source == LiveDeviceSource.FASTBOOT:
+    if identity_confidence == LiveIdentityConfidence.SERIAL_ONLY:
+      guidance.append(
+        'Treat the current fastboot lane as serial-only identity until richer product truth is available.'
+      )
+    else:
+      guidance.append(
+        'Keep the current fastboot lane labeled delegated or fallback; do not flatten it into a native-ready claim.'
+      )
+  elif detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
+    guidance.append(
+      'Keep the current live lane narrowed until ADB becomes command-ready again.'
+    )
+
+  if snapshot is not None:
+    guidance.extend(snapshot.operator_guidance[:2])
+  if fallback_reason:
+    guidance.append(fallback_reason)
+  return _dedupe_preserve_order(guidance)
+
+
+def _identity_label(snapshot: LiveDeviceSnapshot) -> str:
+  """Return one readable identity label for path-summary output."""
+
+  if snapshot.marketing_name is not None:
+    return '{name} ({product})'.format(
+      name=snapshot.marketing_name,
+      product=(
+        snapshot.canonical_product_code
+        or snapshot.product_code
+        or snapshot.serial
+      ),
+    )
+  if snapshot.product_code is not None:
+    return '{product} [{serial}]'.format(
+      product=snapshot.product_code,
+      serial=snapshot.serial,
+    )
+  if snapshot.model_name is not None:
+    return '{model} [{serial}]'.format(
+      model=snapshot.model_name,
+      serial=snapshot.serial,
+    )
+  return snapshot.serial
 
 
 def _command_ready(
@@ -372,6 +976,19 @@ def _capability_hints(
       )
     else:
       hints.append('adb_authorization_required')
+  elif source == LiveDeviceSource.HEIMDALL:
+    hints.append('heimdall_detect')
+    if command_ready:
+      hints.extend(
+        (
+          'heimdall_print_pit',
+          'heimdall_download_pit',
+          'download_mode_detected',
+          'adb_required_for_richer_info',
+        )
+      )
+    else:
+      hints.append('heimdall_attention_required')
   else:
     hints.extend(
       (
@@ -412,6 +1029,9 @@ def _operator_guidance(
     guidance.append('Authorize the ADB session before expecting shell-derived device info or reboot controls.')
   if source == LiveDeviceSource.FASTBOOT:
     guidance.append('Fastboot currently exposes only limited read-side identity; richer device info still requires a command-ready ADB session.')
+  if source == LiveDeviceSource.HEIMDALL:
+    guidance.append('Samsung download mode is present; use PIT review to gather bounded evidence before widening any safe-path claim.')
+    guidance.append('Heimdall does not expose the richer bounded Android property snapshot that a command-ready ADB session can capture.')
   if info_state == LiveDeviceInfoState.CAPTURED:
     guidance.append('Bounded ADB properties were captured successfully for the active live device.')
   elif info_state == LiveDeviceInfoState.PARTIAL:

@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.4.0 - 2026-04-22
+
+Local package-only Sprint 4 boundary, moving session authority, bounded safe-path governance, truthful operator workflow progression, and closeout proof into repo-owned surfaces while intentionally deferring public publication.
+
+### Added
+
+- authoritative session-authority evidence across reporting, shell, and control traces
+- the deterministic `safe-path-close` integration bundle for the Sprint 4 closeout lane
+- real GUI `Read PIT`, package-load, bounded execute, and contextual recovery-continuation flows
+- broader Heimdall detect normalization for Samsung download-mode transcripts plus archived diagnostics for normalization misses
+
+### Changed
+
+- the primary control deck now follows `Detect device -> Read PIT -> Load package -> Execute flash plan -> Export evidence`
+- package/PIT/device truth now narrows or blocks the safe-path lane explicitly instead of remaining descriptive only
+- installed-artifact, scripted-simulation, and empirical-review validation now exercise the Sprint 4 safe-path bundle and bounded execute lane
+- repository metadata now freezes the local package boundary at `0.4.0` while leaving the public boundary at `0.3.0`
+
+### Validated
+
+- the Sprint 4 readiness stack passed in the validated `.venv-core` environment across pytest, adversarial, build, sandbox, scripted, and empirical lanes
+- installed-artifact validation preserved the bounded execute lane, safe-path-close bundle, and delegated safe-path evidence contract
+- scripted simulation preserved source-vs-installed parity for review flows, execute flows, and closeout bundles
+- empirical review preserved readable blocked/failure evidence and packaged GUI screenshots for the reviewed Windows host
+
+### Release-boundary status
+
+- local package boundary frozen at `0.4.0`
+- package artifacts are built and validated locally
+- repository-visible sprint tag boundary sealed at `v0.4.0`
+- no new GitHub release object or PyPI publication was created for Sprint 4; the latest stable GitHub/PyPI release intentionally remains at `0.3.0`
+- renewed TestPyPI/PyPI publication is deferred to the immediate post-`0.6.0` `1.0.0` promotion gate
+
+### Known limitations
+
+- the bounded safe-path lane still relies on delegated Heimdall lower transport rather than a fully Calamum-owned integrated Samsung runtime
+- Windows remains the only empirically reviewed packaged host for the local `0.4.0` boundary
+- Qt font packaging still emits a non-blocking warning in some environments
+- warning-tier checksum placeholder debt remains in legacy fixture manifests
+
 ## 0.3.0 - 2026-04-21
 
 Third public Calamum Vulcan release boundary, moving supported Samsung read-side detection, bounded info capture, PIT-aware inspection review, and closeout evidence into repo-owned platform surfaces while keeping write-side flashing out of the public support boundary.

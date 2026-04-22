@@ -24,9 +24,12 @@ from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
 from calamum_vulcan.adapters.adb_fastboot import AndroidToolsProcessResult
 from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_fastboot_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
 from calamum_vulcan.domain.live_device import apply_live_device_info_trace
 from calamum_vulcan.domain.live_device import build_live_detection_session
+from calamum_vulcan.domain.live_device import LiveFallbackPosture
+from calamum_vulcan.domain.pit import PitDeviceAlignment
 from calamum_vulcan.domain.reporting import REPORT_EXPORT_TARGETS
 from calamum_vulcan.domain.reporting import build_session_evidence_report
 from calamum_vulcan.domain.reporting import render_session_evidence_markdown
@@ -58,6 +61,9 @@ class ReportingContractTests(unittest.TestCase):
     self.assertEqual(payload['preflight']['gate'], 'ready')
     self.assertEqual(payload['package']['package_id'], 'regional-match-demo')
     self.assertEqual(payload['captured_at_utc'], '2026-04-18T20:15:00Z')
+    self.assertEqual(payload['authority']['selected_launch_path'], 'safe_path_candidate')
+    self.assertEqual(payload['authority']['ownership'], 'delegated')
+    self.assertEqual(payload['authority']['readiness'], 'ready')
     self.assertEqual(payload['device']['marketing_name'], 'Galaxy S21')
     self.assertEqual(payload['device']['registry_match_kind'], 'exact')
     self.assertIn('Galaxy S21', payload['package']['compatibility_summary'])
@@ -71,6 +77,85 @@ class ReportingContractTests(unittest.TestCase):
     self.assertEqual(payload['transport']['state'], 'not_invoked')
     self.assertIn('live', payload['device'])
     self.assertEqual(payload['device']['live']['state'], 'unhydrated')
+
+  def test_fastboot_fallback_report_exports_live_path_identity(self) -> None:
+    session = build_demo_session('no-device')
+    live_detection = build_live_detection_session(
+      normalize_android_tools_result(
+        build_fastboot_detect_command_plan(),
+        AndroidToolsProcessResult(
+          fixture_name='fastboot-ready',
+          operation=AndroidToolsOperation.FASTBOOT_DEVICES,
+          backend=AndroidToolsBackend.FASTBOOT,
+          exit_code=0,
+          stdout_lines=('FASTBOOT123\tfastboot',),
+        ),
+      ),
+      fallback_posture=LiveFallbackPosture.ENGAGED,
+      fallback_reason='ADB did not establish a live device; fastboot captured the active companion.',
+      source_labels=('adb', 'fastboot'),
+    )
+    report = build_session_evidence_report(
+      replace(session, live_detection=live_detection),
+      scenario_name='Fastboot fallback review',
+      captured_at_utc='2026-04-21T15:25:00Z',
+    )
+
+    payload = json.loads(serialize_session_evidence_json(report))
+    markdown = render_session_evidence_markdown(report)
+
+    self.assertEqual(payload['authority']['selected_launch_path'], 'fallback_review')
+    self.assertEqual(payload['device']['live']['path_identity']['ownership'], 'fallback')
+    self.assertEqual(
+      payload['device']['live']['path_identity']['path_label'],
+      'Fastboot Fallback Session',
+    )
+    self.assertEqual(
+      payload['device']['live']['path_identity']['identity_confidence'],
+      'serial_only',
+    )
+    self.assertTrue(
+      any('serial-only' in guidance for guidance in payload['outcome']['recovery_guidance'])
+    )
+    self.assertIn('live path identity', markdown)
+
+  def test_pit_device_mismatch_blocks_report_authority_and_exports_alignment(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    pit_inspection = replace(
+      build_demo_pit_inspection(
+        'ready',
+        session=session,
+        package_assessment=package_assessment,
+      ),
+      device_alignment=PitDeviceAlignment.MISMATCHED,
+      observed_product_code='SM-G996U',
+      canonical_product_code='SM-G996U',
+      marketing_name='Galaxy S21+',
+    )
+    report = build_session_evidence_report(
+      session,
+      scenario_name='PIT device mismatch review',
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      captured_at_utc='2026-04-21T13:10:00Z',
+    )
+
+    payload = json.loads(serialize_session_evidence_json(report))
+    markdown = render_session_evidence_markdown(report)
+
+    self.assertEqual(payload['preflight']['gate'], 'blocked')
+    self.assertEqual(payload['authority']['selected_launch_path'], 'blocked')
+    self.assertEqual(payload['pit']['device_alignment'], 'mismatched')
+    self.assertIn(
+      'Observed PIT product code does not match the current session device identity.',
+      payload['authority']['block_reason'],
+    )
+    self.assertIn(
+      'Observed PIT product code does not match the current session device identity.',
+      payload['outcome']['recovery_guidance'][0],
+    )
+    self.assertIn('device alignment', markdown)
 
   def test_report_exports_live_detection_identity_when_present(self) -> None:
     session = build_demo_session('ready')
@@ -132,8 +217,11 @@ class ReportingContractTests(unittest.TestCase):
     self.assertEqual(payload['device']['live']['marketing_name'], 'Galaxy S21')
     self.assertEqual(payload['device']['live']['info_state'], 'captured')
     self.assertEqual(payload['device']['live']['android_version'], '14')
+    self.assertEqual(payload['authority']['live_phase_label'], 'Ready to Execute')
     self.assertIn('bounded_info_snapshot_ready', payload['device']['live']['capability_hints'])
     self.assertEqual(payload['pit']['state'], 'captured')
+    self.assertIn('### Session authority', markdown)
+    self.assertIn('selected launch path', markdown)
     self.assertIn('live detection state', markdown)
     self.assertIn('### PIT inspection', markdown)
     self.assertIn('live marketing name', markdown)
@@ -201,10 +289,12 @@ class ReportingContractTests(unittest.TestCase):
     payload = json.loads(serialize_session_evidence_json(report))
     markdown = render_session_evidence_markdown(report)
 
+    self.assertEqual(payload['authority']['selected_launch_path'], 'safe_path_candidate')
     self.assertEqual(payload['inspection']['posture'], 'ready')
     self.assertTrue(payload['inspection']['pit_ran'])
     self.assertTrue(payload['inspection']['evidence_ready'])
     self.assertIn('### Inspection workflow', markdown)
+    self.assertIn('### Session authority', markdown)
     self.assertIn('Inspect-only workflow captured', markdown)
 
   def test_failure_report_carries_recovery_guidance_into_markdown(self) -> None:
@@ -287,6 +377,12 @@ class ReportingContractTests(unittest.TestCase):
       'preserve_bounded_transport_transcript',
     )
     self.assertTrue(payload['transcript']['reference_file_name'])
+    self.assertTrue(
+      any(
+        '[SAFE-PATH] governance=platform_supervised' in line
+        for line in payload['log_lines']
+      )
+    )
 
   def test_suspicious_review_report_exports_warning_tier_traits(self) -> None:
     session = build_demo_session('ready')
@@ -304,7 +400,6 @@ class ReportingContractTests(unittest.TestCase):
       session,
       scenario_name='Suspicious review lane',
       package_assessment=package_assessment,
-      pit_inspection=pit_inspection,
       captured_at_utc='2026-04-18T20:28:00Z',
     )
 

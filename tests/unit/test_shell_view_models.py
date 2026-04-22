@@ -24,21 +24,33 @@ from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
 from calamum_vulcan.adapters.adb_fastboot import AndroidToolsProcessResult
 from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_fastboot_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
-from calamum_vulcan.app.view_models import PANEL_TITLES
 from calamum_vulcan.app.view_models import LiveCompanionDeviceViewModel
+from calamum_vulcan.app.view_models import PANEL_TITLES
 from calamum_vulcan.app.view_models import build_shell_view_model
 from calamum_vulcan.app.view_models import describe_shell
+from calamum_vulcan.domain.live_device import LiveFallbackPosture
 from calamum_vulcan.domain.live_device import apply_live_device_info_trace
 from calamum_vulcan.domain.live_device import build_live_detection_session
+from calamum_vulcan.domain.pit import PitDeviceAlignment
+from calamum_vulcan.domain.pit import PitPackageAlignment
 from calamum_vulcan.domain.preflight import PreflightGate
 from calamum_vulcan.domain.preflight import PreflightInput
 from calamum_vulcan.domain.preflight import evaluate_preflight
+from calamum_vulcan.domain.state import PlatformEvent
+from calamum_vulcan.domain.state import SessionEventType
+from calamum_vulcan.domain.state import SessionLaunchPath
 from calamum_vulcan.domain.state import build_inspection_workflow
 from calamum_vulcan.domain.state import replay_events
-from calamum_vulcan.fixtures import load_package_manifest_fixture
 from calamum_vulcan.fixtures import happy_path_events
 from calamum_vulcan.fixtures import package_first_events
+
+
+def _actions_by_label(model):
+  """Return the current control actions keyed by operator label."""
+
+  return {action.label: action for action in model.control_actions}
 
 
 class ShellViewModelTests(unittest.TestCase):
@@ -66,6 +78,10 @@ class ShellViewModelTests(unittest.TestCase):
     self.assertEqual(tuple(panel.title for panel in model.panels), PANEL_TITLES)
     self.assertEqual(model.phase_label, 'Validation Blocked')
     self.assertEqual(model.gate_label, 'Gate Blocked')
+    self.assertEqual(
+      model.session_authority.selected_launch_path,
+      SessionLaunchPath.BLOCKED,
+    )
     self.assertTrue(
       any(
         'Package compatibility does not include Galaxy S21 (SM-G991U).' in line
@@ -78,8 +94,9 @@ class ShellViewModelTests(unittest.TestCase):
     self.assertTrue(
       any('SM-G996U' in line for line in model.panels[2].detail_lines)
     )
-    self.assertEqual(model.control_actions[5].label, 'Export evidence')
-    self.assertTrue(model.control_actions[5].enabled)
+    actions = _actions_by_label(model)
+    self.assertIn('Export evidence', actions)
+    self.assertTrue(actions['Export evidence'].enabled)
 
   def test_no_device_shell_keeps_panel_map_and_blocks_export(self) -> None:
     session = build_demo_session('no-device')
@@ -92,8 +109,12 @@ class ShellViewModelTests(unittest.TestCase):
     self.assertEqual(tuple(panel.title for panel in model.panels), PANEL_TITLES)
     self.assertEqual(model.phase_label, 'No Device')
     self.assertEqual(model.gate_label, 'Gate Blocked')
-    self.assertFalse(model.control_actions[5].enabled)
-    self.assertIn('No-device control deck', describe_shell(model))
+    self.assertEqual(
+      model.session_authority.selected_launch_path,
+      SessionLaunchPath.STANDBY,
+    )
+    self.assertFalse(_actions_by_label(model)['Export evidence'].enabled)
+    self.assertIn('enabled_actions=[Detect device]', describe_shell(model))
 
   def test_boot_unhydrated_shell_starts_in_standby_with_blank_fields(self) -> None:
     session = build_demo_session('no-device')
@@ -158,6 +179,7 @@ class ShellViewModelTests(unittest.TestCase):
     }
 
     self.assertEqual(model.phase_label, 'ADB Device Detected')
+    self.assertEqual(model.session_authority.live_phase_label, 'ADB Device Detected')
     self.assertEqual(pill_map['Device'].value, 'SM_A037U via ADB')
     self.assertEqual(pill_map['Device'].tone, 'success')
     self.assertEqual(pill_map['Phase'].value, 'ADB Device Detected')
@@ -169,6 +191,38 @@ class ShellViewModelTests(unittest.TestCase):
     self.assertTrue(
       any(
         'Reviewed target posture: No Download-Mode Target' in line
+        for line in model.panels[0].detail_lines
+      )
+    )
+
+  def test_live_heimdall_overlay_promotes_download_mode_phase_display(self) -> None:
+    session = build_demo_session('no-device')
+    live_device = LiveCompanionDeviceViewModel(
+      backend='heimdall',
+      serial='samsung-galaxy-lab-04',
+      state='download',
+      transport='download-mode',
+      product_code='SM-G991U',
+    )
+    model = build_shell_view_model(
+      session,
+      scenario_name='Live Heimdall overlay',
+      live_device=live_device,
+    )
+
+    pill_map = {pill.label: pill for pill in model.status_pills}
+
+    self.assertEqual(model.phase_label, 'Download-Mode Device Detected')
+    self.assertEqual(
+      model.session_authority.live_phase_label,
+      'Download-Mode Device Detected',
+    )
+    self.assertEqual(pill_map['Phase'].value, 'Download-Mode Device Detected')
+    self.assertEqual(pill_map['Device'].value, 'SM-G991U via HEIMDALL')
+    self.assertIn('via HEIMDALL', model.panels[0].summary)
+    self.assertTrue(
+      any(
+        'Live companion backend: HEIMDALL' in line
         for line in model.panels[0].detail_lines
       )
     )
@@ -227,7 +281,7 @@ class ShellViewModelTests(unittest.TestCase):
       any('Next step:' in line for line in model.panels[0].detail_lines)
     )
 
-  def test_inspect_device_action_and_evidence_panel_surface_read_side_lane(self) -> None:
+  def test_read_pit_action_and_evidence_panel_surface_bounded_pit_lane(self) -> None:
     session = build_demo_session('ready')
     package_assessment = build_demo_package_assessment('ready', session=session)
     pit_inspection = build_demo_pit_inspection(
@@ -286,9 +340,14 @@ class ShellViewModelTests(unittest.TestCase):
       pit_inspection=pit_inspection,
     )
 
-    self.assertEqual(model.control_actions[2].label, 'Inspect device')
-    self.assertTrue(model.control_actions[2].enabled)
+    actions = _actions_by_label(model)
+
+    self.assertEqual(actions['Read PIT'].state.value, 'completed')
+    self.assertFalse(actions['Read PIT'].enabled)
     self.assertEqual(model.session_report.inspection.posture, 'ready')
+    self.assertTrue(
+      any('Authority summary:' in line for line in model.panels[4].detail_lines)
+    )
     self.assertIn('Inspect-only workflow captured', model.panels[4].summary)
     self.assertTrue(
       any('Inspection posture: ready' in line for line in model.panels[4].detail_lines)
@@ -316,11 +375,19 @@ class ShellViewModelTests(unittest.TestCase):
       pit_inspection=pit_inspection,
     )
 
-    execute_action = model.control_actions[3]
+    execute_action = _actions_by_label(model)['Execute flash plan']
+
     self.assertTrue(execute_action.enabled)
     self.assertEqual(execute_action.emphasis, 'danger')
+    self.assertEqual(
+      model.session_authority.selected_launch_path,
+      SessionLaunchPath.SAFE_PATH_CANDIDATE,
+    )
     self.assertEqual(model.phase_label, 'Ready to Execute')
     self.assertEqual(model.gate_label, 'Gate Ready')
+    self.assertTrue(
+      any('Launch path: Safe-Path Candidate' in line for line in model.panels[3].detail_lines)
+    )
     self.assertTrue(
       any('RECOVERY <- recovery.img' in line for line in model.panels[2].detail_lines)
     )
@@ -377,29 +444,49 @@ class ShellViewModelTests(unittest.TestCase):
 
     self.assertEqual(report.gate, PreflightGate.WARN)
     self.assertEqual(model.gate_label, 'Gate Warning')
-    self.assertFalse(model.control_actions[3].enabled)
+    self.assertFalse(_actions_by_label(model)['Execute flash plan'].enabled)
     self.assertTrue(
       any(
         'Battery level is low enough to justify operator caution.' in line
         for line in model.panels[1].detail_lines
       )
     )
-    self.assertTrue(model.control_actions[5].enabled)
+    self.assertTrue(_actions_by_label(model)['Export evidence'].enabled)
 
-  def test_resume_shell_surfaces_resume_action(self) -> None:
-    session = build_demo_session('resume')
+  def test_resume_shell_surfaces_contextual_continue_action(self) -> None:
+    session = replay_events(
+      happy_path_events()[:-1] + [
+        PlatformEvent(
+          SessionEventType.EXECUTION_PAUSED,
+          {'notes': ('Manual recovery boot required',)},
+        )
+      ]
+    )
     package_assessment = build_demo_package_assessment('resume', session=session)
+    pit_inspection = build_demo_pit_inspection(
+      'resume',
+      session=session,
+      package_assessment=package_assessment,
+    )
     model = build_shell_view_model(
       session,
       scenario_name=scenario_label('resume'),
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      pit_required_for_safe_path=True,
     )
 
-    self.assertEqual(model.phase_label, 'Completed')
-    self.assertIn('Resume workflow', tuple(
-      action.label for action in model.control_actions
-    ))
-    self.assertIn('[EVENT] execution_completed', model.log_lines)
+    action_map = _actions_by_label(model)
+    visible_labels = tuple(
+      action.label for action in model.control_actions if action.visible
+    )
+
+    self.assertIn('Continue after recovery', visible_labels)
+    self.assertNotIn('Resume workflow', visible_labels)
+    self.assertEqual(action_map['Continue after recovery'].state.value, 'next')
+    self.assertTrue(action_map['Continue after recovery'].enabled)
+    self.assertEqual(model.phase_label, 'Resume Needed')
+    self.assertIn('[EVENT] execution_paused', model.log_lines)
     self.assertTrue(
       any('[PACKAGE-CTX] matched' in line for line in model.log_lines)
     )
@@ -436,7 +523,7 @@ class ShellViewModelTests(unittest.TestCase):
     )
 
     self.assertEqual(model.gate_label, 'Gate Blocked')
-    self.assertFalse(model.control_actions[3].enabled)
+    self.assertFalse(_actions_by_label(model)['Execute flash plan'].enabled)
     self.assertTrue(
       any('Contract issue:' in line for line in model.panels[2].detail_lines)
     )
@@ -488,9 +575,121 @@ class ShellViewModelTests(unittest.TestCase):
       any('Capability: flash_package' in line for line in model.panels[3].detail_lines)
     )
     self.assertTrue(
+      any('Safe-path governance:' in line for line in model.panels[3].detail_lines)
+    )
+    self.assertTrue(
       any('[TRANSPORT] flash_package state=failed exit=1' in line for line in model.log_lines)
     )
-    self.assertTrue(model.control_actions[5].enabled)
+    self.assertTrue(
+      any('[SAFE-PATH] governance=platform_supervised' in line for line in model.log_lines)
+    )
+    self.assertTrue(_actions_by_label(model)['Export evidence'].enabled)
+
+  def test_fastboot_fallback_identity_surfaces_path_label_and_confidence(self) -> None:
+    session = build_demo_session('no-device')
+    live_detection = build_live_detection_session(
+      normalize_android_tools_result(
+        build_fastboot_detect_command_plan(),
+        AndroidToolsProcessResult(
+          fixture_name='fastboot-ready',
+          operation=AndroidToolsOperation.FASTBOOT_DEVICES,
+          backend=AndroidToolsBackend.FASTBOOT,
+          exit_code=0,
+          stdout_lines=('FASTBOOT123\tfastboot',),
+        ),
+      ),
+      fallback_posture=LiveFallbackPosture.ENGAGED,
+      fallback_reason='ADB did not establish a live device; fastboot captured the active companion.',
+      source_labels=('adb', 'fastboot'),
+    )
+
+    model = build_shell_view_model(
+      replace(session, live_detection=live_detection),
+      scenario_name='Fastboot fallback review',
+    )
+
+    self.assertEqual(
+      model.session_authority.selected_launch_path,
+      SessionLaunchPath.FALLBACK_REVIEW,
+    )
+    self.assertTrue(
+      any('Live path: Fastboot Fallback Session' in line for line in model.panels[0].detail_lines)
+    )
+    self.assertTrue(
+      any('Identity confidence: serial only' in line for line in model.panels[0].detail_lines)
+    )
+    self.assertTrue(
+      any('Live path identity: Fastboot Fallback Session' in line for line in model.panels[3].detail_lines)
+    )
+    self.assertTrue(
+      any('Live path identity: Fastboot Fallback Session / fallback / serial_only' in line for line in model.panels[4].detail_lines)
+    )
+
+  def test_pit_device_mismatch_blocks_safe_path_shell_and_surfaces_alignment(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    pit_inspection = replace(
+      build_demo_pit_inspection(
+        'ready',
+        session=session,
+        package_assessment=package_assessment,
+      ),
+      device_alignment=PitDeviceAlignment.MISMATCHED,
+      observed_product_code='SM-G996U',
+      canonical_product_code='SM-G996U',
+      marketing_name='Galaxy S21+',
+    )
+
+    model = build_shell_view_model(
+      session,
+      scenario_name='PIT device mismatch review',
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+    )
+
+    self.assertEqual(model.gate_label, 'Gate Blocked')
+    self.assertEqual(model.session_authority.selected_launch_path, SessionLaunchPath.BLOCKED)
+    self.assertTrue(
+      any('PIT/device alignment: mismatched' in line for line in model.panels[2].detail_lines)
+    )
+    self.assertTrue(
+      any(
+        'Observed PIT product code does not match the current session device identity.' in line
+        for line in model.panels[3].detail_lines
+      )
+    )
+    self.assertTrue(
+      any('PIT/device alignment: mismatched' in line for line in model.panels[4].detail_lines)
+    )
+
+  def test_missing_pit_fingerprint_comparison_narrows_ready_shell(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    pit_inspection = replace(
+      build_demo_pit_inspection(
+        'ready',
+        session=session,
+        package_assessment=package_assessment,
+      ),
+      package_alignment=PitPackageAlignment.MISSING_OBSERVED,
+      observed_pit_fingerprint=None,
+    )
+
+    model = build_shell_view_model(
+      session,
+      scenario_name='Narrowed PIT fingerprint review',
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+    )
+
+    self.assertEqual(model.gate_label, 'Gate Ready')
+    self.assertEqual(
+      model.session_authority.selected_launch_path,
+      SessionLaunchPath.SAFE_PATH_CANDIDATE,
+    )
+    self.assertEqual(model.session_authority.readiness.value, 'narrowed')
+    self.assertEqual(model.panels[2].tone, 'warning')
+    self.assertIn('usable PIT fingerprint', model.session_authority.block_reason)
 
   def test_alias_product_code_is_resolved_in_the_device_panel(self) -> None:
     session = replace(build_demo_session('ready'), product_code='g991u')
@@ -516,15 +715,24 @@ class ShellViewModelTests(unittest.TestCase):
       session=session,
       package_fixture_name='suspicious-review',
     )
+    pit_inspection = build_demo_pit_inspection(
+      'ready',
+      session=session,
+      package_assessment=package_assessment,
+    )
     model = build_shell_view_model(
       session,
       scenario_name='Suspicious review lane',
       package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
     )
 
+    self.assertIsNotNone(pit_inspection)
+    self.assertEqual(pit_inspection.reviewed_pit_fingerprint, 'PIT-G991U-SUSPICIOUS-001')
+    self.assertEqual(pit_inspection.package_alignment.value, 'matched')
     self.assertEqual(model.gate_label, 'Gate Ready')
     self.assertEqual(model.panels[2].tone, 'warning')
-    self.assertTrue(model.control_actions[3].enabled)
+    self.assertTrue(_actions_by_label(model)['Execute flash plan'].enabled)
     self.assertTrue(
       any('Suspicious trait:' in line for line in model.panels[2].detail_lines)
     )
@@ -533,6 +741,37 @@ class ShellViewModelTests(unittest.TestCase):
     )
     self.assertTrue(
       any('Flash plan warning:' in line for line in model.panels[4].detail_lines)
+    )
+
+  def test_missing_pit_truth_keeps_safe_path_pinned_on_read_pit(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    live_device = LiveCompanionDeviceViewModel(
+      backend='heimdall',
+      serial='samsung-galaxy-lab-04',
+      state='download',
+      transport='download-mode',
+      product_code='SM-G991U',
+    )
+
+    model = build_shell_view_model(
+      session,
+      scenario_name='Missing PIT safe-path review',
+      package_assessment=package_assessment,
+      pit_inspection=None,
+      live_device=live_device,
+      pit_required_for_safe_path=True,
+    )
+
+    actions = _actions_by_label(model)
+
+    self.assertEqual(model.gate_label, 'Gate Blocked')
+    self.assertEqual(actions['Read PIT'].state.value, 'next')
+    self.assertFalse(actions['Execute flash plan'].enabled)
+    self.assertEqual(actions['Export evidence'].state.value, 'available')
+    self.assertIn(
+      'Run Read PIT before continuing the bounded safe-path workflow.',
+      model.session_authority.block_reason,
     )
 
 

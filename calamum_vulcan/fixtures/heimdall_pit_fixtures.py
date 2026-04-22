@@ -24,6 +24,20 @@ HEIMDALL_PIT_FIXTURES = {
       'PIT print completed successfully.',
     ),
   ),
+  'pit-print-suspicious-g991u': HeimdallProcessResult(
+    fixture_name='pit-print-suspicious-g991u',
+    operation=HeimdallOperation.PRINT_PIT,
+    exit_code=0,
+    stdout_lines=(
+      'Heimdall v1.4.2',
+      'Printing PIT...',
+      'PIT metadata: product_code=SM-G991U fingerprint=PIT-G991U-SUSPICIOUS-001 entry_count=3',
+      'Entry: index=7 partition=BOOT file_name=boot.img.lz4 block_count=32768 file_offset=0',
+      'Entry: index=20 partition=RECOVERY file_name=recovery.img block_count=131072 file_offset=32768',
+      'Entry: index=21 partition=VBMETA file_name=vbmeta.img block_count=4096 file_offset=163840',
+      'PIT print completed successfully.',
+    ),
+  ),
   'pit-print-ready-g973f': HeimdallProcessResult(
     fixture_name='pit-print-ready-g973f',
     operation=HeimdallOperation.PRINT_PIT,

@@ -1,6 +1,7 @@
 """Repo-owned PIT contracts for Calamum Vulcan Sprint 0.3.0 work."""
 
 from .builder import build_pit_inspection
+from .builder import preflight_overrides_from_pit_inspection
 from .model import PIT_SCHEMA_VERSION
 from .model import PitDeviceAlignment
 from .model import PitFallbackPosture
@@ -20,4 +21,5 @@ __all__ = [
 	'PitPartitionRecord',
 	'PitSource',
 	'build_pit_inspection',
+	'preflight_overrides_from_pit_inspection',
 ]

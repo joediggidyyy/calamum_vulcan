@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from dataclasses import dataclass
+from dataclasses import field
 from enum import Enum
 from typing import Any
 from typing import Dict
@@ -12,6 +13,7 @@ from typing import Tuple
 
 
 LIVE_DEVICE_SCHEMA_VERSION = '0.3.0-fs3-03'
+LIVE_PATH_IDENTITY_SCHEMA_VERSION = '0.4.0-fs4-04'
 
 
 class LiveDeviceSource(str, Enum):
@@ -19,6 +21,7 @@ class LiveDeviceSource(str, Enum):
 
   ADB = 'adb'
   FASTBOOT = 'fastboot'
+  HEIMDALL = 'heimdall'
 
 
 class LiveDetectionState(str, Enum):
@@ -55,6 +58,43 @@ class LiveDeviceInfoState(str, Enum):
   PARTIAL = 'partial'
   UNAVAILABLE = 'unavailable'
   FAILED = 'failed'
+
+
+class LivePathOwnership(str, Enum):
+  """Ownership label for the current live or delegated path."""
+
+  NONE = 'none'
+  NATIVE = 'native'
+  DELEGATED = 'delegated'
+  FALLBACK = 'fallback'
+
+
+class LiveIdentityConfidence(str, Enum):
+  """How much repo-owned identity is currently available for one live path."""
+
+  UNAVAILABLE = 'unavailable'
+  SERIAL_ONLY = 'serial_only'
+  PRODUCT_RESOLVED = 'product_resolved'
+  PROFILED = 'profiled'
+
+
+@dataclass(frozen=True)
+class LivePathIdentity:
+  """Repo-owned identity surface for one native, delegated, or fallback lane."""
+
+  schema_version: str = LIVE_PATH_IDENTITY_SCHEMA_VERSION
+  ownership: LivePathOwnership = LivePathOwnership.NONE
+  path_label: str = 'No Live Path'
+  delegated_path_label: str = 'none'
+  mode_label: str = 'No Live Mode'
+  identity_confidence: LiveIdentityConfidence = LiveIdentityConfidence.UNAVAILABLE
+  summary: str = 'No live or fallback identity is currently active.'
+  operator_guidance: Tuple[str, ...] = ()
+
+  def to_dict(self) -> Dict[str, Any]:
+    """Return a JSON-serializable dictionary for this path identity."""
+
+    return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -107,6 +147,7 @@ class LiveDetectionSession:
   fallback_posture: LiveFallbackPosture = LiveFallbackPosture.NOT_NEEDED
   fallback_reason: Optional[str] = None
   snapshot: Optional[LiveDeviceSnapshot] = None
+  path_identity: LivePathIdentity = field(default_factory=LivePathIdentity)
   notes: Tuple[str, ...] = ()
 
   @classmethod

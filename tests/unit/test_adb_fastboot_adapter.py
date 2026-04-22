@@ -78,6 +78,25 @@ class AdbFastbootAdapterTests(unittest.TestCase):
     self.assertEqual(trace.detected_devices[0].serial, 'R58N12345AB')
     self.assertEqual(trace.detected_devices[0].state, 'fastboot')
 
+  def test_fastboot_detection_parses_optional_identity_tokens(self) -> None:
+    command_plan = build_fastboot_detect_command_plan()
+    process_result = AndroidToolsProcessResult(
+      fixture_name='fastboot-identity',
+      operation=AndroidToolsOperation.FASTBOOT_DEVICES,
+      backend=AndroidToolsBackend.FASTBOOT,
+      exit_code=0,
+      stdout_lines=(
+        'FASTBOOT123\tfastboot product:dm3q model:SM_G991U device:dm3q',
+      ),
+    )
+
+    trace = normalize_android_tools_result(command_plan, process_result)
+
+    self.assertEqual(trace.state, AndroidToolsTraceState.DETECTED)
+    self.assertEqual(trace.detected_devices[0].product, 'dm3q')
+    self.assertEqual(trace.detected_devices[0].model, 'SM_G991U')
+    self.assertEqual(trace.detected_devices[0].device, 'dm3q')
+
   def test_adb_device_info_plan_and_normalization_surface_structured_properties(self) -> None:
     command_plan = build_adb_device_info_command_plan(device_serial='R58N12345AB')
     process_result = AndroidToolsProcessResult(
@@ -172,6 +191,26 @@ class AdbFastbootAdapterTests(unittest.TestCase):
     self.assertEqual(process_result.exit_code, 124)
     self.assertEqual(process_result.stdout_lines, ('List of devices attached',))
     self.assertIn('timed out after', process_result.stderr_lines[-1])
+
+  def test_runtime_uses_shorter_timeout_for_detect_and_info_than_global_bound(self) -> None:
+    self.assertLess(
+      adb_fastboot_runtime._timeout_seconds_for_operation(
+        AndroidToolsOperation.ADB_DEVICES,
+      ),
+      adb_fastboot_runtime.PROCESS_TIMEOUT_SECONDS,
+    )
+    self.assertLess(
+      adb_fastboot_runtime._timeout_seconds_for_operation(
+        AndroidToolsOperation.ADB_GETPROP,
+      ),
+      adb_fastboot_runtime.PROCESS_TIMEOUT_SECONDS,
+    )
+    self.assertEqual(
+      adb_fastboot_runtime._timeout_seconds_for_operation(
+        AndroidToolsOperation.ADB_REBOOT,
+      ),
+      15,
+    )
 
   def test_runtime_suppresses_windows_console_window_for_live_commands(self) -> None:
     command_plan = build_adb_detect_command_plan()

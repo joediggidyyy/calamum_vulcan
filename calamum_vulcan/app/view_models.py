@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import replace
+from enum import Enum
 from typing import Dict
 from typing import Optional
 from typing import Tuple
@@ -22,7 +23,6 @@ from calamum_vulcan.domain.live_device import LiveDeviceSupportPosture
 from calamum_vulcan.domain.package import PackageCompatibilityExpectation
 from calamum_vulcan.domain.package import PackageManifestAssessment
 from calamum_vulcan.domain.package import PackageRiskLevel
-from calamum_vulcan.domain.package import preflight_overrides_from_package_assessment
 from calamum_vulcan.domain.pit import PitInspection
 from calamum_vulcan.domain.pit import PitInspectionState
 from calamum_vulcan.domain.preflight import PreflightGate
@@ -31,10 +31,14 @@ from calamum_vulcan.domain.preflight import PreflightReport
 from calamum_vulcan.domain.preflight import PreflightSeverity
 from calamum_vulcan.domain.preflight import PreflightSignal
 from calamum_vulcan.domain.preflight import evaluate_preflight
+from calamum_vulcan.domain.preflight import preflight_input_from_review_context
 from calamum_vulcan.domain.reporting import SessionEvidenceReport
 from calamum_vulcan.domain.reporting import build_session_evidence_report
 from calamum_vulcan.domain.state import PlatformSession
+from calamum_vulcan.domain.state import SessionAuthoritySnapshot
+from calamum_vulcan.domain.state import SessionLaunchPath
 from calamum_vulcan.domain.state import SessionPhase
+from calamum_vulcan.domain.state import build_session_authority_snapshot
 
 
 PANEL_TITLES = (
@@ -50,11 +54,13 @@ UNPOPULATED_VALUE = '--'
 LIVE_PHASE_LABELS = {
   LiveDeviceSource.ADB: 'ADB Device Detected',
   LiveDeviceSource.FASTBOOT: 'Fastboot Device Detected',
+  LiveDeviceSource.HEIMDALL: 'Download-Mode Device Detected',
 }  # type: Dict[LiveDeviceSource, str]
 
 LIVE_PHASE_ATTENTION_LABELS = {
   LiveDeviceSource.ADB: 'ADB Device Attention',
   LiveDeviceSource.FASTBOOT: 'Fastboot Device Attention',
+  LiveDeviceSource.HEIMDALL: 'Download-Mode Device Attention',
 }  # type: Dict[LiveDeviceSource, str]
 
 PHASE_LABELS = {
@@ -128,14 +134,39 @@ class PanelViewModel:
   tone: str = 'neutral'
 
 
+class ControlActionState(str, Enum):
+  """Operator-visible workflow posture for one control-deck action."""
+
+  HIDDEN = 'hidden'
+  UNAVAILABLE = 'unavailable'
+  AVAILABLE = 'available'
+  NEXT = 'next'
+  COMPLETED = 'completed'
+
+
+class ControlActionSection(str, Enum):
+  """Deck section used to separate the primary flow from contextual recovery."""
+
+  PRIMARY = 'primary'
+  CONTEXTUAL = 'contextual'
+
+
 @dataclass(frozen=True)
 class ControlActionViewModel:
-  """A shell control-deck action with availability and emphasis."""
+  """A shell control-deck action with explicit workflow posture."""
 
   label: str
   hint: str
+  state: ControlActionState
   enabled: bool
   emphasis: str = 'normal'
+  section: ControlActionSection = ControlActionSection.PRIMARY
+
+  @property
+  def visible(self) -> bool:
+    """Return whether the action should be rendered in the current deck."""
+
+    return self.state != ControlActionState.HIDDEN
 
 
 @dataclass(frozen=True)
@@ -167,6 +198,7 @@ class ShellViewModel:
   control_actions: Tuple[ControlActionViewModel, ...]
   log_lines: Tuple[str, ...]
   session_report: SessionEvidenceReport
+  session_authority: SessionAuthoritySnapshot
   session: PlatformSession
   package_assessment: Optional[PackageManifestAssessment]
   pit_inspection: Optional[PitInspection]
@@ -175,6 +207,7 @@ class ShellViewModel:
   live_device: Optional[LiveCompanionDeviceViewModel] = None
   boot_unhydrated: bool = False
   device_surface_cleared: bool = False
+  pit_required_for_safe_path: bool = False
 
 
 def build_shell_view_model(
@@ -189,6 +222,7 @@ def build_shell_view_model(
   live_device: Optional[LiveCompanionDeviceViewModel] = None,
   boot_unhydrated: bool = False,
   device_surface_cleared: bool = False,
+  pit_required_for_safe_path: bool = False,
 ) -> ShellViewModel:
   """Build the FS-03 shell model directly from the immutable session."""
 
@@ -205,10 +239,14 @@ def build_shell_view_model(
     )
   )
   session = _session_with_live_detection(session, resolved_live_detection)
-  phase_label, phase_tone = _display_phase(session, resolved_live_detection)
   report = preflight_report
   if report is None:
-    report = _build_preflight_report(session, package_assessment)
+    report = _build_preflight_report(
+      session,
+      package_assessment,
+      pit_inspection,
+      pit_required_for_safe_path=pit_required_for_safe_path,
+    )
   evidence_report = session_report
   if evidence_report is None:
     evidence_report = build_session_evidence_report(
@@ -218,14 +256,22 @@ def build_shell_view_model(
       package_assessment=package_assessment,
       pit_inspection=pit_inspection,
       transport_trace=transport_trace,
+      pit_required_for_safe_path=pit_required_for_safe_path,
     )
+  authority = build_session_authority_snapshot(
+    session,
+    preflight_report=report,
+    package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
+    pit_required_for_safe_path=pit_required_for_safe_path,
+  )
   compatibility_live_device = _compat_live_device_overlay(resolved_live_detection)
   return ShellViewModel(
     title='Calamum Vulcan',
     subtitle='Samsung operations console — reviewed-session GUI shell',
     scenario_name=scenario_name,
-    phase_label=phase_label,
-    phase_tone=phase_tone,
+    phase_label=authority.live_phase_label,
+    phase_tone=authority.live_phase_tone,
     gate_label='Standby' if boot_unhydrated else GATE_LABELS[report.gate],
     gate_tone='neutral' if boot_unhydrated else GATE_TONES[report.gate],
     status_pills=_build_status_pills(
@@ -233,6 +279,7 @@ def build_shell_view_model(
       report,
       package_assessment,
       resolved_live_detection,
+      authority,
       boot_unhydrated,
       resolved_device_surface_cleared,
     ),
@@ -243,12 +290,19 @@ def build_shell_view_model(
       pit_inspection,
       evidence_report,
       resolved_live_detection,
+      authority,
       boot_unhydrated,
       resolved_device_surface_cleared,
     ),
-    control_actions=_build_control_actions(session, report, evidence_report),
+    control_actions=_build_control_actions(
+      session,
+      report,
+      evidence_report,
+      authority,
+    ),
     log_lines=evidence_report.log_lines,
     session_report=evidence_report,
+    session_authority=authority,
     session=session,
     package_assessment=package_assessment,
     pit_inspection=pit_inspection,
@@ -257,6 +311,7 @@ def build_shell_view_model(
     live_device=compatibility_live_device,
     boot_unhydrated=boot_unhydrated,
     device_surface_cleared=resolved_device_surface_cleared,
+    pit_required_for_safe_path=pit_required_for_safe_path,
   )
 
 
@@ -265,7 +320,9 @@ def describe_shell(model: ShellViewModel) -> str:
 
   panel_titles = ', '.join(panel.title for panel in model.panels)
   enabled_actions = ', '.join(
-    action.label for action in model.control_actions if action.enabled
+    action.label
+    for action in model.control_actions
+    if action.visible and action.enabled
   )
   if not enabled_actions:
     enabled_actions = 'none'
@@ -351,6 +408,8 @@ def _legacy_live_device_to_detection(
       live_device.state == 'device'
       if source == LiveDeviceSource.ADB
       else live_device.state == 'fastboot'
+      if source == LiveDeviceSource.FASTBOOT
+      else live_device.state == 'download'
     ),
     product_code=product_code,
     model_name=live_device.model_name,
@@ -384,11 +443,13 @@ def _build_status_pills(
   report: PreflightReport,
   package_assessment: Optional[PackageManifestAssessment],
   live_detection: LiveDetectionSession,
+  authority: SessionAuthoritySnapshot,
   boot_unhydrated: bool,
   device_surface_cleared: bool,
 ) -> Tuple[StatusPillViewModel, ...]:
   live_snapshot = live_detection.snapshot
-  phase_label, phase_tone = _display_phase(session, live_detection)
+  phase_label = authority.live_phase_label
+  phase_tone = authority.live_phase_tone
   if boot_unhydrated:
     risk_value = UNPOPULATED_VALUE
     risk_tone = 'neutral'
@@ -460,6 +521,7 @@ def _build_panels(
   pit_inspection: Optional[PitInspection],
   session_report: SessionEvidenceReport,
   live_detection: LiveDetectionSession,
+  authority: SessionAuthoritySnapshot,
   boot_unhydrated: bool,
   device_surface_cleared: bool,
 ) -> Tuple[PanelViewModel, ...]:
@@ -467,6 +529,7 @@ def _build_panels(
     _build_device_panel(
       session,
       live_detection,
+      authority,
       boot_unhydrated,
       device_surface_cleared,
     ),
@@ -480,10 +543,10 @@ def _build_panels(
     _build_transport_panel(
       session,
       session_report,
-      live_detection,
+      authority,
       boot_unhydrated,
     ),
-    _build_evidence_panel(session_report, boot_unhydrated),
+    _build_evidence_panel(session_report, authority, boot_unhydrated),
   )
 
 
@@ -494,7 +557,13 @@ def _display_phase(
   """Return the operator-facing phase label/tone for the current shell."""
 
   snapshot = live_detection.snapshot
-  if session.phase == SessionPhase.NO_DEVICE and snapshot is not None:
+  if (
+    session.phase in (SessionPhase.NO_DEVICE, SessionPhase.DEVICE_DETECTED)
+    and not session.guards.package_loaded
+    and snapshot is not None
+  ):
+    if live_detection.state == LiveDetectionState.ATTENTION:
+      return LIVE_PHASE_ATTENTION_LABELS[snapshot.source], 'warning'
     if snapshot.command_ready:
       return LIVE_PHASE_LABELS[snapshot.source], 'info'
     return LIVE_PHASE_ATTENTION_LABELS[snapshot.source], 'warning'
@@ -512,6 +581,7 @@ def _reviewed_target_phase_label(session: PlatformSession) -> str:
 def _build_device_panel(
   session: PlatformSession,
   live_detection: LiveDetectionSession,
+  authority: SessionAuthoritySnapshot,
   boot_unhydrated: bool,
   device_surface_cleared: bool,
 ) -> PanelViewModel:
@@ -545,6 +615,7 @@ def _build_device_panel(
       'Latest detect: {summary}'.format(summary=live_detection.summary),
       'Next action: reconnect and run Detect device again.',
     ]
+    details.extend(_live_path_identity_lines(live_detection))
     details.extend(_live_fallback_lines(live_detection))
     return PanelViewModel(
       title='Device Identity',
@@ -563,8 +634,9 @@ def _build_device_panel(
   if live_detection.state == LiveDetectionState.FAILED and live_snapshot is None:
     details = [
       'Latest detect: {summary}'.format(summary=live_detection.summary),
-      'Next action: verify adb/fastboot availability and rerun Detect device.',
+      'Next action: verify adb/fastboot/heimdall availability and rerun Detect device.',
     ]
+    details.extend(_live_path_identity_lines(live_detection))
     details.extend(_live_fallback_lines(live_detection))
     for note in live_detection.notes[:2]:
       details.append('Live note: {note}'.format(note=note))
@@ -584,13 +656,25 @@ def _build_device_panel(
 
   if live_snapshot is not None:
     backend_label = live_snapshot.source.value.upper()
-    reviewed_target_phase = _reviewed_target_phase_label(session)
-    summary = 'Live companion detected {device} via {backend} while the reviewed target posture remains {phase}.'.format(
-      device=_live_device_summary_identity(live_snapshot, device_resolution),
-      backend=backend_label,
-      phase=reviewed_target_phase,
-    )
-    if not live_snapshot.command_ready:
+    reviewed_target_phase = authority.reviewed_target_label
+    path_identity = live_detection.path_identity
+    if path_identity.ownership.value in ('delegated', 'fallback'):
+      summary = '{path} identified {device} via {backend} while the reviewed target posture remains {phase}.'.format(
+        path=path_identity.path_label,
+        device=_live_device_summary_identity(live_snapshot, device_resolution),
+        backend=backend_label,
+        phase=reviewed_target_phase,
+      )
+    else:
+      summary = 'Live companion detected {device} via {backend} while the reviewed target posture remains {phase}.'.format(
+        device=_live_device_summary_identity(live_snapshot, device_resolution),
+        backend=backend_label,
+        phase=reviewed_target_phase,
+      )
+    if (
+      not live_snapshot.command_ready
+      or live_detection.state == LiveDetectionState.ATTENTION
+    ):
       summary = 'Live companion identified {device} via {backend}, but it still needs operator attention while the reviewed target posture remains {phase}.'.format(
         device=_live_device_summary_identity(live_snapshot, device_resolution),
         backend=backend_label,
@@ -622,6 +706,7 @@ def _build_device_panel(
       'Live mode: {mode}'.format(mode=live_snapshot.mode),
       'Reviewed target posture: {phase}'.format(phase=reviewed_target_phase),
     ]
+    details.extend(_live_path_identity_lines(live_detection))
     details.extend(_live_fallback_lines(live_detection))
     if live_product_code is not None:
       details.append(
@@ -693,7 +778,11 @@ def _build_device_panel(
       if note not in details:
         details.append('Live note: {note}'.format(note=note))
 
-    tone = 'success' if live_snapshot.command_ready else 'warning'
+    tone = (
+      'success'
+      if live_snapshot.command_ready and live_detection.state != LiveDetectionState.ATTENTION
+      else 'warning'
+    )
     metrics = (
       MetricViewModel('Presence', 'live', tone),
       MetricViewModel('Product code', live_product_code or 'unknown', 'info'),
@@ -877,6 +966,30 @@ def _live_fallback_lines(
     lines.append(
       'Fallback reason: {reason}'.format(reason=live_detection.fallback_reason)
     )
+  return tuple(lines)
+
+
+def _live_path_identity_lines(
+  live_detection: LiveDetectionSession,
+) -> Tuple[str, ...]:
+  """Return explicit delegated/fallback path-identity lines when relevant."""
+
+  path_identity = live_detection.path_identity
+  if path_identity.ownership.value in ('none', 'native'):
+    return ()
+  lines = [
+    'Live path: {label}'.format(label=path_identity.path_label),
+    'Delegated path label: {label}'.format(
+      label=path_identity.delegated_path_label,
+    ),
+    'Path mode truth: {mode}'.format(mode=path_identity.mode_label),
+    'Identity confidence: {confidence}'.format(
+      confidence=path_identity.identity_confidence.value.replace('_', ' '),
+    ),
+    'Path summary: {summary}'.format(summary=path_identity.summary),
+  ]
+  for guidance in path_identity.operator_guidance[:1]:
+    lines.append('Path guidance: {guidance}'.format(guidance=guidance))
   return tuple(lines)
 
 
@@ -1097,6 +1210,11 @@ def _build_package_panel(
       summary = '{name} does not match the detected Samsung product code.'.format(
         name=package_assessment.display_name,
       )
+  elif pit_inspection is not None and pit_inspection.device_alignment.value == 'mismatched':
+    summary = '{name} cannot be cleared because the observed device PIT does not match the current session device identity.'.format(
+      name=package_assessment.display_name,
+    )
+    tone = 'danger'
   elif pit_inspection is not None and pit_inspection.package_alignment.value == 'mismatched':
     summary = '{name} does not match the observed device PIT fingerprint.'.format(
       name=package_assessment.display_name,
@@ -1107,6 +1225,24 @@ def _build_package_panel(
     PitInspectionState.FAILED,
   ):
     summary = '{name} still needs trustworthy PIT inspection truth before deeper review should continue.'.format(
+      name=package_assessment.display_name,
+    )
+    tone = 'warning'
+  elif pit_inspection is not None and pit_inspection.state == PitInspectionState.PARTIAL:
+    summary = '{name} still needs complete PIT alignment truth before the current safe-path claim should widen.'.format(
+      name=package_assessment.display_name,
+    )
+    tone = 'warning'
+  elif pit_inspection is not None and pit_inspection.package_alignment.value in (
+    'missing_reviewed',
+    'missing_observed',
+  ):
+    summary = '{name} still needs a complete PIT fingerprint comparison before the current safe-path claim should widen.'.format(
+      name=package_assessment.display_name,
+    )
+    tone = 'warning'
+  elif pit_inspection is not None and pit_inspection.device_alignment.value == 'not_provided':
+    summary = '{name} still needs PIT/device alignment truth before the current safe-path claim should widen.'.format(
       name=package_assessment.display_name,
     )
     tone = 'warning'
@@ -1159,10 +1295,11 @@ def _build_package_panel(
 def _build_transport_panel(
   session: PlatformSession,
   session_report: SessionEvidenceReport,
-  live_detection: LiveDetectionSession,
+  authority: SessionAuthoritySnapshot,
   boot_unhydrated: bool,
 ) -> PanelViewModel:
-  phase_label, phase_tone = _display_phase(session, live_detection)
+  phase_label = authority.live_phase_label
+  phase_tone = authority.live_phase_tone
   if boot_unhydrated:
     return PanelViewModel(
       title='Transport State',
@@ -1183,11 +1320,44 @@ def _build_transport_panel(
   transport = session_report.transport
   tone = _transport_tone(transport.state)
   details = [
+    'Launch path: {path}'.format(
+      path=authority.selected_launch_path_label,
+    ),
+    'Path ownership: {ownership}'.format(
+      ownership=authority.ownership.value.replace('_', ' '),
+    ),
+    'Authority readiness: {readiness}'.format(
+      readiness=authority.readiness.value.replace('_', ' '),
+    ),
     'Adapter: {adapter}'.format(adapter=transport.adapter_name),
     'Capability: {capability}'.format(capability=transport.capability),
     'Command: {command}'.format(command=transport.command_display),
     'Normalized events: {count}'.format(count=transport.normalized_event_count),
   ]
+  details.extend(_safe_path_governance_lines(session_report))
+  live_path_identity = session_report.device.live.path_identity
+  if live_path_identity.ownership in ('delegated', 'fallback'):
+    details.extend(
+      (
+        'Live path identity: {label}'.format(
+          label=live_path_identity.path_label,
+        ),
+        'Delegated label: {label}'.format(
+          label=live_path_identity.delegated_path_label,
+        ),
+        'Path confidence: {confidence}'.format(
+          confidence=live_path_identity.identity_confidence.replace('_', ' '),
+        ),
+      )
+    )
+  if authority.block_reason is not None:
+    details.append('Authority block reason: {reason}'.format(
+      reason=authority.block_reason,
+    ))
+  if authority.refresh_reason is not None:
+    details.append('Authority refresh: {reason}'.format(
+      reason=authority.refresh_reason,
+    ))
   if transport.progress_markers:
     details.append(
       'Progress markers: {markers}'.format(
@@ -1225,6 +1395,7 @@ def _build_transport_panel(
 
 def _build_evidence_panel(
   session_report: SessionEvidenceReport,
+  authority: SessionAuthoritySnapshot,
   boot_unhydrated: bool,
 ) -> PanelViewModel:
   if boot_unhydrated:
@@ -1252,6 +1423,19 @@ def _build_evidence_panel(
     'Captured at: {captured}'.format(
       captured=session_report.captured_at_utc,
     ),
+    'Authority summary: {summary}'.format(
+      summary=authority.summary,
+    ),
+    'Launch path: {path} / {ownership} / {readiness}'.format(
+      path=authority.selected_launch_path_label,
+      ownership=authority.ownership.value,
+      readiness=authority.readiness.value,
+    ),
+    'Live path identity: {path} / {ownership} / {confidence}'.format(
+      path=session_report.device.live.path_identity.path_label,
+      ownership=session_report.device.live.path_identity.ownership,
+      confidence=session_report.device.live.path_identity.identity_confidence,
+    ),
     'Flash plan id: {plan_id}'.format(
       plan_id=session_report.flash_plan.plan_id,
     ),
@@ -1273,6 +1457,9 @@ def _build_evidence_panel(
       state=session_report.pit.state,
       alignment=session_report.pit.package_alignment,
     ),
+    'PIT/device alignment: {alignment}'.format(
+      alignment=session_report.pit.device_alignment,
+    ),
     'Observed PIT fingerprint: {fingerprint}'.format(
       fingerprint=session_report.pit.observed_pit_fingerprint or 'unknown',
     ),
@@ -1286,6 +1473,32 @@ def _build_evidence_panel(
       targets=', '.join(target.upper() for target in session_report.host.export_targets),
     ),
   ]
+  details.extend(_safe_path_governance_lines(session_report))
+  if session_report.device.live.path_identity.ownership in ('delegated', 'fallback'):
+    details.append(
+      'Live delegated label: {label}'.format(
+        label=session_report.device.live.path_identity.delegated_path_label,
+      )
+    )
+    details.append(
+      'Live path summary: {summary}'.format(
+        summary=session_report.device.live.path_identity.summary,
+      )
+    )
+    if session_report.device.live.path_identity.operator_guidance:
+      details.append(
+        'Live path guidance: {guidance}'.format(
+          guidance=session_report.device.live.path_identity.operator_guidance[0],
+        )
+      )
+  if authority.block_reason is not None:
+    details.append('Authority block reason: {reason}'.format(
+      reason=authority.block_reason,
+    ))
+  if authority.refresh_reason is not None:
+    details.append('Authority refresh: {reason}'.format(
+      reason=authority.refresh_reason,
+    ))
   if session_report.inspection.posture != 'uninspected':
     details.extend(
       (
@@ -1377,63 +1590,187 @@ def _build_control_actions(
   session: PlatformSession,
   report: PreflightReport,
   session_report: SessionEvidenceReport,
+  authority: SessionAuthoritySnapshot,
 ) -> Tuple[ControlActionViewModel, ...]:
-  execute_enabled = (
-    session.phase == SessionPhase.READY_TO_EXECUTE
-    and report.ready_for_execution
+  detect_completed = session.live_detection.snapshot is not None
+  download_mode_snapshot = _download_mode_snapshot(session)
+  pit_capture_complete = _pit_capture_complete(session_report)
+  package_loaded = bool(
+    session.guards.package_loaded
+    or session_report.package.source_kind != 'pending'
   )
-  execute_emphasis = 'primary'
-  if session.package_risk == 'destructive':
+  flash_attempted = session_report.transport.state in (
+    'executing',
+    'resume_needed',
+    'completed',
+    'failed',
+  )
+  execution_resolved = session_report.transport.state in ('completed', 'failed')
+  execute_ready = bool(
+    authority.selected_launch_path == SessionLaunchPath.SAFE_PATH_CANDIDATE
+    and authority.readiness.value == 'ready'
+    and report.ready_for_execution
+    and session_report.flash_plan.ready_for_transport
+  )
+  execute_state = ControlActionState.UNAVAILABLE
+  if flash_attempted:
+    execute_state = ControlActionState.COMPLETED
+  elif execute_ready:
+    execute_state = ControlActionState.NEXT
+  elif package_loaded and pit_capture_complete and session_report.flash_plan.ready_for_transport:
+    execute_state = ControlActionState.AVAILABLE
+
+  execute_emphasis = 'normal'
+  if execute_state in (ControlActionState.NEXT, ControlActionState.AVAILABLE):
+    execute_emphasis = 'primary'
+  if session.package_risk == 'destructive' and execute_state in (
+    ControlActionState.NEXT,
+    ControlActionState.AVAILABLE,
+  ):
     execute_emphasis = 'danger'
 
+  export_state = ControlActionState.UNAVAILABLE
+  if session_report.outcome.export_ready:
+    export_state = ControlActionState.NEXT if execution_resolved else ControlActionState.AVAILABLE
+
+  resume_needed = bool(
+    session.phase == SessionPhase.RESUME_NEEDED
+    or session_report.transport.state == 'resume_needed'
+  )
   return (
     ControlActionViewModel(
       label='Detect device',
-      hint='Probe Samsung download-mode presence and identity.',
+      hint=(
+        'Refresh unified live truth across ADB, fastboot, and Samsung '
+        'download mode.'
+        if detect_completed
+        else 'Probe Samsung live presence and identity across ADB, fastboot, and Heimdall.'
+      ),
+      state=(
+        ControlActionState.COMPLETED
+        if detect_completed
+        else ControlActionState.NEXT
+      ),
       enabled=True,
-      emphasis='normal',
+      emphasis='normal' if detect_completed else 'primary',
+    ),
+    ControlActionViewModel(
+      label='Read PIT',
+      hint=(
+        'Re-read bounded PIT truth for the current Samsung download-mode session.'
+        if pit_capture_complete
+        else 'Capture bounded PIT truth from the current Samsung download-mode session.'
+        if download_mode_snapshot is not None
+        else 'Read PIT unlocks only after Detect device finds an active Samsung download-mode session via Heimdall.'
+      ),
+      state=(
+        ControlActionState.COMPLETED
+        if pit_capture_complete
+        else ControlActionState.NEXT
+        if download_mode_snapshot is not None
+        else ControlActionState.UNAVAILABLE
+      ),
+      enabled=download_mode_snapshot is not None,
+      emphasis='primary' if download_mode_snapshot is not None and not pit_capture_complete else 'normal',
     ),
     ControlActionViewModel(
       label='Load package',
-      hint='Stage firmware metadata for compatibility review.',
-      enabled=True,
-      emphasis='normal',
-    ),
-    ControlActionViewModel(
-      label='Inspect device',
-      hint='Run the first-class inspect-only lane: detect/info/PIT evidence without opening a write path.',
-      enabled=True,
-      emphasis='primary',
+      hint=(
+        'Reviewed package truth is already staged; load a different firmware set only if the current review changes.'
+        if package_loaded
+        else 'Stage reviewed firmware metadata after PIT truth is captured.'
+        if pit_capture_complete
+        else 'Load package stays pinned behind Detect device and Read PIT in the Sprint 0.4.0 deck.'
+      ),
+      state=(
+        ControlActionState.COMPLETED
+        if package_loaded
+        else ControlActionState.NEXT
+        if pit_capture_complete
+        else ControlActionState.UNAVAILABLE
+      ),
+      enabled=package_loaded or pit_capture_complete,
+      emphasis='primary' if not package_loaded and pit_capture_complete else 'normal',
     ),
     ControlActionViewModel(
       label='Execute flash plan',
-      hint='Dangerously gated action kept visually separate on purpose.',
-      enabled=execute_enabled,
+      hint=(
+        'The bounded safe-path lane already ran for this review state; export the resulting evidence bundle next.'
+        if flash_attempted
+        else 'Review-only placeholder until matched package, PIT, and preflight truth open the bounded safe-path lane.'
+        if execute_state == ControlActionState.UNAVAILABLE
+        else 'Review the bounded safe-path lane before handing control to the delegated lower transport.'
+      ),
+      state=execute_state,
+      enabled=execute_ready,
       emphasis=execute_emphasis,
     ),
     ControlActionViewModel(
-      label='Resume workflow',
-      hint='Available only when a no-reboot or manual step is pending.',
-      enabled=session.phase == SessionPhase.RESUME_NEEDED,
-      emphasis='warning',
+      label='Export evidence',
+      hint=(
+        'Export the resolved evidence bundle and preserved transcript artifacts.'
+        if export_state == ControlActionState.NEXT
+        else 'Export the current evidence bundle at any time without widening the write path.'
+        if export_state == ControlActionState.AVAILABLE
+        else 'Export becomes available after meaningful detection, review, or runtime activity.'
+      ),
+      state=export_state,
+      enabled=session_report.outcome.export_ready,
+      emphasis='primary' if export_state == ControlActionState.NEXT else 'normal',
     ),
     ControlActionViewModel(
-      label='Export evidence',
-      hint='Render the FS-06 evidence bundle for review or archival.',
-      enabled=session_report.outcome.export_ready,
-      emphasis='primary' if session_report.outcome.export_ready else 'normal',
+      label='Continue after recovery',
+      hint='Complete the recorded manual recovery step, then resume the bounded safe-path workflow without pretending it is a normal deck stage.',
+      state=(
+        ControlActionState.NEXT
+        if resume_needed
+        else ControlActionState.HIDDEN
+      ),
+      enabled=resume_needed,
+      emphasis='warning',
+      section=ControlActionSection.CONTEXTUAL,
     ),
+  )
+
+
+def _download_mode_snapshot(
+  session: PlatformSession,
+) -> Optional[LiveDeviceSnapshot]:
+  """Return the active Heimdall download-mode snapshot when one is present."""
+
+  snapshot = session.live_detection.snapshot
+  if snapshot is None:
+    return None
+  if snapshot.source != LiveDeviceSource.HEIMDALL or not snapshot.command_ready:
+    return None
+  return snapshot
+
+
+def _pit_capture_complete(
+  session_report: SessionEvidenceReport,
+) -> bool:
+  """Return whether PIT truth is complete enough to unlock the next deck step."""
+
+  return bool(
+    session_report.pit.state == 'captured'
+    and session_report.pit.device_alignment != 'not_provided'
   )
 
 
 def _build_preflight_report(
   session: PlatformSession,
   package_assessment: Optional[PackageManifestAssessment],
+  pit_inspection: Optional[PitInspection],
+  pit_required_for_safe_path: bool = False,
 ) -> PreflightReport:
-  if package_assessment is None:
-    return evaluate_preflight(PreflightInput.from_session(session))
-  overrides = preflight_overrides_from_package_assessment(package_assessment)
-  return evaluate_preflight(PreflightInput.from_session(session, **overrides))
+  return evaluate_preflight(
+    preflight_input_from_review_context(
+      session,
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      pit_required=pit_required_for_safe_path,
+    )
+  )
 
 
 def _package_risk_value(
@@ -1490,8 +1827,14 @@ def _risk_tone(risk_level: Optional[PackageRiskLevel]) -> str:
 def _evidence_tone(session_report: SessionEvidenceReport) -> str:
   if session_report.pit.state in ('failed', 'malformed'):
     return 'danger'
+  if session_report.pit.device_alignment == 'mismatched':
+    return 'danger'
   if session_report.pit.package_alignment == 'mismatched':
     return 'danger'
+  if session_report.pit.device_alignment == 'not_provided':
+    return 'warning'
+  if session_report.pit.package_alignment in ('missing_reviewed', 'missing_observed'):
+    return 'warning'
   if session_report.pit.state == 'partial':
     return 'warning'
   if session_report.outcome.outcome == 'failed':
@@ -1517,6 +1860,21 @@ def _transport_tone(state: str) -> str:
   if state in ('executing', 'detected'):
     return 'info'
   return 'neutral'
+
+
+def _safe_path_governance_lines(
+  session_report: SessionEvidenceReport,
+) -> Tuple[str, ...]:
+  transport = session_report.transport
+  if (
+    transport.capability != 'flash_package'
+    or transport.command_display == 'not_invoked'
+  ):
+    return ()
+  return (
+    'Safe-path governance: platform-supervised bounded reviewed flash session',
+    'Delegated boundary: Heimdall remains the lower transport lane while the platform owns gating, supervision, and evidence.',
+  )
 
 
 def _package_detail_lines(
@@ -1611,6 +1969,11 @@ def _package_detail_lines(
     details.append(
       'PIT/package alignment: {alignment}'.format(
         alignment=pit_inspection.package_alignment.value.replace('_', ' '),
+      )
+    )
+    details.append(
+      'PIT/device alignment: {alignment}'.format(
+        alignment=pit_inspection.device_alignment.value.replace('_', ' '),
       )
     )
     if pit_inspection.partition_names:

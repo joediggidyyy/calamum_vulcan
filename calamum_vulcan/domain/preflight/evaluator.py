@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import List
+from typing import Optional
 
 from calamum_vulcan.domain.device_registry import DeviceRegistryMatchKind
 
@@ -29,6 +30,9 @@ def evaluate_preflight(inputs: PreflightInput) -> PreflightReport:
     signals.append(_battery_signal(inputs))
     signals.append(_cable_signal(inputs))
 
+  if _pit_review_required(inputs):
+    signals.append(_pit_required_signal(inputs))
+
   signals.append(_package_presence_signal(inputs))
 
   if inputs.package_selected:
@@ -43,6 +47,16 @@ def evaluate_preflight(inputs: PreflightInput) -> PreflightReport:
     and inputs.device_registry_known
   ):
     signals.append(_compatibility_signal(inputs))
+
+  if inputs.pit_state not in (None, 'not_collected'):
+    signals.append(_pit_state_signal(inputs))
+    if inputs.pit_state not in ('failed', 'malformed'):
+      pit_device_signal = _pit_device_alignment_signal(inputs)
+      if pit_device_signal is not None:
+        signals.append(pit_device_signal)
+      pit_package_signal = _pit_package_alignment_signal(inputs)
+      if pit_package_signal is not None:
+        signals.append(pit_package_signal)
 
   signals.append(_destructive_ack_signal(inputs))
 
@@ -433,6 +447,167 @@ def _compatibility_signal(inputs: PreflightInput) -> PreflightSignal:
     ),
     remediation='Switch to a package that explicitly supports the resolved device profile before continuing.',
   )
+
+
+def _pit_review_required(inputs: PreflightInput) -> bool:
+  """Return whether the current review path explicitly requires PIT truth."""
+
+  return bool(
+    inputs.pit_required
+    and inputs.device_present
+    and inputs.in_download_mode
+    and inputs.pit_state in (None, 'not_collected')
+  )
+
+
+def _pit_required_signal(inputs: PreflightInput) -> PreflightSignal:
+  """Return the missing-PIT prerequisite signal for bounded safe-path review."""
+
+  return PreflightSignal(
+    rule_id='pit_required',
+    category=PreflightCategory.COMPATIBILITY,
+    severity=PreflightSeverity.BLOCK,
+    title='PIT review required',
+    summary='Bounded safe-path review requires PIT truth before package or execute claims widen.',
+    remediation='Run Read PIT before continuing the bounded safe-path workflow.',
+  )
+
+
+def _pit_state_signal(inputs: PreflightInput) -> PreflightSignal:
+  if inputs.pit_state == 'captured':
+    return PreflightSignal(
+      rule_id='pit_state',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.PASS,
+      title='PIT inspection captured',
+      summary='Observed PIT truth is available for bounded alignment review.',
+      remediation='No PIT-state action required.',
+    )
+  if inputs.pit_state == 'partial':
+    return PreflightSignal(
+      rule_id='pit_state',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.WARN,
+      title='PIT inspection partial',
+      summary=(
+        inputs.pit_summary
+        or 'Observed PIT truth is only partially available; keep safe-path claims narrowed until PIT metadata and partition rows agree fully.'
+      ),
+      remediation='Keep PIT review bounded until metadata and partition rows agree fully.',
+    )
+  if inputs.pit_state == 'malformed':
+    return PreflightSignal(
+      rule_id='pit_state',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.BLOCK,
+      title='PIT inspection malformed',
+      summary=(
+        inputs.pit_summary
+        or 'Observed PIT truth did not satisfy the parser contract and cannot back a safe-path claim.'
+      ),
+      remediation='Resolve the malformed PIT output before continuing.',
+    )
+  if inputs.pit_state == 'failed':
+    return PreflightSignal(
+      rule_id='pit_state',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.BLOCK,
+      title='PIT inspection failed',
+      summary=(
+        inputs.pit_summary
+        or 'Observed PIT truth could not be captured reliably enough for safe-path review.'
+      ),
+      remediation='Re-run PIT acquisition only after the failure is understood and bounded.',
+    )
+  return PreflightSignal(
+    rule_id='pit_state',
+    category=PreflightCategory.COMPATIBILITY,
+    severity=PreflightSeverity.WARN,
+    title='PIT inspection unresolved',
+    summary=(
+      inputs.pit_summary
+      or 'Observed PIT truth is not yet stable enough to widen the current safe-path claim.'
+    ),
+    remediation='Stabilize PIT inspection before widening safe-path claims.',
+  )
+
+
+def _pit_device_alignment_signal(
+  inputs: PreflightInput,
+) -> Optional[PreflightSignal]:
+  if inputs.pit_device_alignment == 'matched':
+    return PreflightSignal(
+      rule_id='pit_device_alignment',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.PASS,
+      title='PIT/device alignment matched',
+      summary='Observed PIT product code agrees with the current session device identity.',
+      remediation='No PIT/device follow-up required.',
+    )
+  if inputs.pit_device_alignment == 'mismatched':
+    observed_product_code = inputs.pit_observed_product_code or 'unknown'
+    return PreflightSignal(
+      rule_id='pit_device_alignment',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.BLOCK,
+      title='PIT/device alignment mismatch',
+      summary='Observed PIT product code {product_code} does not match the current session device identity.'.format(
+        product_code=observed_product_code,
+      ),
+      remediation='Do not proceed until the observed PIT product code agrees with the current session device identity.',
+    )
+  if inputs.pit_device_alignment == 'not_provided':
+    return PreflightSignal(
+      rule_id='pit_device_alignment',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.WARN,
+      title='PIT/device alignment unresolved',
+      summary='Observed PIT truth did not provide a comparable product code for device alignment review.',
+      remediation='Capture clearer PIT identity before widening the safe-path claim.',
+    )
+  return None
+
+
+def _pit_package_alignment_signal(
+  inputs: PreflightInput,
+) -> Optional[PreflightSignal]:
+  if inputs.pit_package_alignment == 'matched':
+    return PreflightSignal(
+      rule_id='pit_package_alignment',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.PASS,
+      title='PIT/package alignment matched',
+      summary='Observed PIT fingerprint matches the reviewed package fingerprint.',
+      remediation='No PIT/package follow-up required.',
+    )
+  if inputs.pit_package_alignment == 'mismatched':
+    return PreflightSignal(
+      rule_id='pit_package_alignment',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.BLOCK,
+      title='PIT/package alignment mismatch',
+      summary='Observed PIT fingerprint does not match the reviewed package fingerprint.',
+      remediation='Do not proceed until the reviewed package PIT fingerprint matches the observed device PIT.',
+    )
+  if inputs.pit_package_alignment == 'missing_reviewed':
+    return PreflightSignal(
+      rule_id='pit_package_alignment',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.WARN,
+      title='PIT/package alignment unresolved',
+      summary='Reviewed package truth does not yet provide a usable PIT fingerprint for comparison.',
+      remediation='Hydrate reviewed package PIT truth before widening the safe-path claim.',
+    )
+  if inputs.pit_package_alignment == 'missing_observed':
+    return PreflightSignal(
+      rule_id='pit_package_alignment',
+      category=PreflightCategory.COMPATIBILITY,
+      severity=PreflightSeverity.WARN,
+      title='Observed PIT fingerprint missing',
+      summary='Observed PIT output did not provide a usable PIT fingerprint for comparison.',
+      remediation='Capture clearer PIT output before widening the safe-path claim.',
+    )
+  return None
 
 
 def _destructive_ack_signal(inputs: PreflightInput) -> PreflightSignal:

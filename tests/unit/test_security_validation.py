@@ -88,6 +88,10 @@ class SecurityValidationTests(unittest.TestCase):
     self.assertEqual(checks['transport_transcript_promotion'].status, 'passed')
     self.assertEqual(checks['gui_runtime_log_boundary'].status, 'passed')
     self.assertIn(checks['checksum_placeholders'].status, ('warn', 'passed'))
+    self.assertIn(
+      'delegated path identity',
+      checks['fallback_visibility_contract'].summary,
+    )
 
 
 if __name__ == '__main__':

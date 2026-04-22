@@ -18,6 +18,13 @@ from .normalizer import normalize_android_tools_result
 
 ProcessRunner = Callable[[AndroidToolsCommandPlan], AndroidToolsProcessResult]
 PROCESS_TIMEOUT_SECONDS = 30
+OPERATION_TIMEOUT_SECONDS = {
+  'adb_devices': 8,
+  'fastboot_devices': 8,
+  'adb_getprop': 10,
+  'adb_reboot': 15,
+  'fastboot_reboot': 15,
+}
 
 
 def execute_android_tools_command(
@@ -39,6 +46,7 @@ def _run_process(
   fixture_name: str,
 ) -> AndroidToolsProcessResult:
   command = [_resolve_executable(command_plan.executable)] + list(command_plan.arguments)
+  timeout_seconds = _timeout_seconds_for_operation(command_plan.operation)
   try:
     completed = subprocess.run(
       command,
@@ -47,7 +55,7 @@ def _run_process(
       encoding='utf-8',
       errors='replace',
       text=True,
-      timeout=PROCESS_TIMEOUT_SECONDS,
+      timeout=timeout_seconds,
       **_subprocess_window_suppression_kwargs(),
     )
   except FileNotFoundError:
@@ -68,7 +76,7 @@ def _run_process(
     timeout_message = (
       '{backend} command timed out after {seconds} seconds.'.format(
         backend=command_plan.backend.value,
-        seconds=PROCESS_TIMEOUT_SECONDS,
+        seconds=timeout_seconds,
       )
     )
     if stderr_lines:
@@ -91,6 +99,16 @@ def _run_process(
     exit_code=completed.returncode,
     stdout_lines=tuple(completed.stdout.splitlines()),
     stderr_lines=tuple(completed.stderr.splitlines()),
+  )
+
+
+def _timeout_seconds_for_operation(operation: AndroidToolsOperation) -> int:
+  """Return the bounded timeout for one companion operation."""
+
+  operation_key = getattr(operation, 'value', str(operation))
+  return min(
+    PROCESS_TIMEOUT_SECONDS,
+    int(OPERATION_TIMEOUT_SECONDS.get(operation_key, PROCESS_TIMEOUT_SECONDS)),
   )
 
 

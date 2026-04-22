@@ -10,6 +10,7 @@ from .model import FlashPlanEvidence
 from .model import HostEnvironmentEvidence
 from .model import InspectionWorkflowEvidence
 from .model import LiveDeviceEvidence
+from .model import LivePathIdentityEvidence
 from .model import OPTIONAL_SESSION_REPORT_FIELDS
 from .model import OutcomeEvidence
 from .model import PackageEvidence
@@ -18,6 +19,7 @@ from .model import PreflightEvidence
 from .model import REPORT_EXPORT_TARGETS
 from .model import REPORT_SCHEMA_VERSION
 from .model import REQUIRED_SESSION_REPORT_FIELDS
+from .model import SessionAuthorityEvidence
 from .model import SessionEvidenceReport
 from .model import TranscriptEvidence
 from .model import TransportEvidence
@@ -29,6 +31,7 @@ __all__ = [
   'HostEnvironmentEvidence',
   'InspectionWorkflowEvidence',
   'LiveDeviceEvidence',
+  'LivePathIdentityEvidence',
   'OPTIONAL_SESSION_REPORT_FIELDS',
   'OutcomeEvidence',
   'PackageEvidence',
@@ -37,6 +40,7 @@ __all__ = [
   'REPORT_EXPORT_TARGETS',
   'REPORT_SCHEMA_VERSION',
   'REQUIRED_SESSION_REPORT_FIELDS',
+  'SessionAuthorityEvidence',
   'SessionEvidenceReport',
   'TranscriptEvidence',
   'TransportEvidence',

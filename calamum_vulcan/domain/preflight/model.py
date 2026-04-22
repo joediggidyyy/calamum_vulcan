@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Dict
 from typing import Optional
 from typing import Tuple
 
 from calamum_vulcan.domain.device_registry import DeviceRegistryMatchKind
 from calamum_vulcan.domain.device_registry import resolve_device_profile
-from calamum_vulcan.domain.state import PlatformSession
-from calamum_vulcan.domain.state import SessionPhase
+from calamum_vulcan.domain.state.model import PlatformSession
+from calamum_vulcan.domain.state.model import SessionPhase
 
 
 class PreflightSeverity(str, Enum):
@@ -87,6 +88,12 @@ class PreflightInput:
   suspicious_indicator_ids: Tuple[str, ...] = ()
   session_phase: Optional[SessionPhase] = None
   notes: Tuple[str, ...] = ()
+  pit_required: bool = False
+  pit_state: Optional[str] = None
+  pit_summary: Optional[str] = None
+  pit_package_alignment: Optional[str] = None
+  pit_device_alignment: Optional[str] = None
+  pit_observed_product_code: Optional[str] = None
 
   @classmethod
   def from_session(
@@ -131,6 +138,7 @@ class PreflightInput:
       'suspicious_indicator_ids': (),
       'session_phase': session.phase,
       'notes': session.preflight_notes,
+      'pit_required': False,
     }
     defaults.update(overrides)
     return cls(**defaults)
@@ -157,3 +165,46 @@ def _infer_reboot_mode(session: PlatformSession) -> str:
   if 'manual recovery boot required' in notes:
     return 'no_reboot'
   return 'standard'
+
+
+def preflight_overrides_from_review_context(
+  package_assessment: Optional[object] = None,
+  pit_inspection: Optional[object] = None,
+  pit_required: bool = False,
+) -> Dict[str, object]:
+  """Merge package and PIT truth into one preflight-override dictionary."""
+
+  overrides = {}  # type: Dict[str, object]
+  if pit_required:
+    overrides['pit_required'] = True
+  if package_assessment is not None:
+    from calamum_vulcan.domain.package import preflight_overrides_from_package_assessment
+
+    overrides.update(
+      preflight_overrides_from_package_assessment(package_assessment)
+    )
+  if pit_inspection is not None:
+    from calamum_vulcan.domain.pit import preflight_overrides_from_pit_inspection
+
+    overrides.update(
+      preflight_overrides_from_pit_inspection(pit_inspection)
+    )
+  return overrides
+
+
+def preflight_input_from_review_context(
+  session: PlatformSession,
+  package_assessment: Optional[object] = None,
+  pit_inspection: Optional[object] = None,
+  pit_required: bool = False,
+) -> 'PreflightInput':
+  """Build one preflight input snapshot from reviewed package and PIT truth."""
+
+  return PreflightInput.from_session(
+    session,
+    **preflight_overrides_from_review_context(
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      pit_required=pit_required,
+    )
+  )

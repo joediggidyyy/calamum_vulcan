@@ -394,6 +394,22 @@ def _run_registry_install_validation(
   if 'Calamum Vulcan FS-08 sprint-close bundle' not in bundle_markdown:
     raise SystemExit('Registry-installed sprint-close bundle is missing the expected heading.')
 
+  safe_path_bundle_path = validation_root / 'registry_safe_path_close_bundle.md'
+  _run(
+    [
+      str(_venv_entrypoint(venv_root, command_name)),
+      '--integration-suite', 'safe-path-close',
+      '--suite-format', 'markdown',
+      '--suite-output', str(safe_path_bundle_path),
+      '--captured-at-utc', captured_at,
+    ],
+    cwd=validation_root,
+    env=install_env,
+  )
+  safe_path_bundle_markdown = safe_path_bundle_path.read_text(encoding='utf-8')
+  if 'Calamum Vulcan FS4-07 safe-path-close bundle' not in safe_path_bundle_markdown:
+    raise SystemExit('Registry-installed safe-path-close bundle is missing the expected heading.')
+
   metadata_result = _run(
     [str(python_path), '-c', _metadata_probe_code()],
     cwd=validation_root,

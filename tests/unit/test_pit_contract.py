@@ -19,6 +19,7 @@ from calamum_vulcan.app.demo import build_demo_session
 from calamum_vulcan.domain.pit import PitInspectionState
 from calamum_vulcan.domain.pit import PitPackageAlignment
 from calamum_vulcan.domain.pit import build_pit_inspection
+from calamum_vulcan.domain.pit import preflight_overrides_from_pit_inspection
 from calamum_vulcan.fixtures import load_heimdall_pit_fixture
 
 
@@ -97,6 +98,26 @@ class PitContractTests(unittest.TestCase):
     self.assertEqual(inspection.state, PitInspectionState.MALFORMED)
     self.assertTrue(inspection.notes)
     self.assertIn('did not satisfy the repo-owned parser contract', inspection.summary)
+
+  def test_preflight_overrides_follow_pit_inspection_alignment_truth(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    trace = normalize_heimdall_result(
+      build_print_pit_command_plan(),
+      load_heimdall_pit_fixture('pit-print-ready-g991u'),
+    )
+
+    inspection = build_pit_inspection(
+      trace,
+      detected_product_code=session.product_code,
+      package_assessment=package_assessment,
+    )
+    overrides = preflight_overrides_from_pit_inspection(inspection)
+
+    self.assertEqual(overrides['pit_state'], 'captured')
+    self.assertEqual(overrides['pit_package_alignment'], 'matched')
+    self.assertEqual(overrides['pit_device_alignment'], 'matched')
+    self.assertEqual(overrides['pit_observed_product_code'], 'SM-G991U')
 
 
 if __name__ == '__main__':

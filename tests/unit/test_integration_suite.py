@@ -16,6 +16,7 @@ if str(FINAL_EXAM_ROOT) not in sys.path:
 from calamum_vulcan.app.integration import build_sprint_close_bundle
 from calamum_vulcan.app.integration import build_orchestration_close_bundle
 from calamum_vulcan.app.integration import build_read_side_close_bundle
+from calamum_vulcan.app.integration import build_safe_path_close_bundle
 from calamum_vulcan.app.integration import render_sprint_close_bundle_markdown
 from calamum_vulcan.app.integration import serialize_sprint_close_bundle_json
 from calamum_vulcan.app.integration import write_sprint_close_bundle
@@ -149,6 +150,52 @@ class IntegrationSuiteTests(unittest.TestCase):
     self.assertIn('inspection posture:', markdown)
     self.assertIn('fallback=`engaged`', markdown)
     self.assertIn('Carry-forward debt into 0.4.0', markdown)
+
+  def test_safe_path_close_bundle_proves_truthful_safe_path_progression(self) -> None:
+    bundle = build_safe_path_close_bundle(
+      captured_at_utc='2026-04-21T23:10:00Z'
+    )
+    scenario_map = {scenario.scenario_id: scenario for scenario in bundle.scenarios}
+
+    self.assertEqual(bundle.release_version, '0.4.0')
+    self.assertEqual(bundle.suite_name, 'safe-path-close')
+    self.assertEqual(
+      tuple(scenario_map.keys()),
+      (
+        'read-pit-required-review',
+        'load-package-required-review',
+        'safe-path-ready-review',
+        'safe-path-runtime-complete',
+        'pit-mismatch-block-review',
+        'fastboot-fallback-boundary-review',
+      ),
+    )
+    self.assertTrue(all(point.passed for point in bundle.proof_points))
+    self.assertEqual(scenario_map['read-pit-required-review'].gate_label, 'Gate Blocked')
+    self.assertEqual(scenario_map['safe-path-ready-review'].gate_label, 'Gate Ready')
+    self.assertEqual(scenario_map['safe-path-ready-review'].live_source, 'heimdall')
+    self.assertEqual(
+      dict(scenario_map['safe-path-ready-review'].action_states)['Execute flash plan'],
+      'next',
+    )
+    self.assertEqual(
+      dict(scenario_map['safe-path-runtime-complete'].action_states)['Export evidence'],
+      'next',
+    )
+    self.assertEqual(scenario_map['pit-mismatch-block-review'].pit_package_alignment, 'mismatched')
+    self.assertEqual(scenario_map['fastboot-fallback-boundary-review'].live_source, 'fastboot')
+
+  def test_safe_path_close_markdown_mentions_truthful_deck_and_sprint5_boundary(self) -> None:
+    bundle = build_safe_path_close_bundle(
+      captured_at_utc='2026-04-21T23:15:00Z'
+    )
+    markdown = render_sprint_close_bundle_markdown(bundle)
+
+    self.assertIn('Calamum Vulcan FS4-07 safe-path-close bundle', markdown)
+    self.assertIn('Sprint 0.4.0 closes with 5/5 safe-path-close proof points satisfied', markdown)
+    self.assertIn('Read PIT required review', markdown)
+    self.assertIn('Execute flash plan=next', markdown)
+    self.assertIn('Carry-forward debt into 0.5.0', markdown)
 
 
 if __name__ == '__main__':

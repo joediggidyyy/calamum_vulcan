@@ -27,15 +27,21 @@ from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
 from calamum_vulcan.adapters.adb_fastboot import AndroidToolsProcessResult
 from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
+from calamum_vulcan.adapters.adb_fastboot import build_fastboot_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
+from calamum_vulcan.adapters.heimdall import HeimdallOperation
+from calamum_vulcan.adapters.heimdall import HeimdallProcessResult
+from calamum_vulcan.adapters.heimdall import build_detect_device_command_plan
 from calamum_vulcan.adapters.heimdall import build_print_pit_command_plan
 from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
 from calamum_vulcan.app.__main__ import gui_main
 from calamum_vulcan.app.__main__ import main
 from calamum_vulcan.app.__main__ import _render_control_trace
 from calamum_vulcan.app.__main__ import _render_codesentinel_status_block
+from calamum_vulcan.domain.live_device import LiveFallbackPosture
 from calamum_vulcan.domain.live_device import apply_live_device_info_trace
 from calamum_vulcan.domain.live_device import build_live_detection_session
+from calamum_vulcan.fixtures import load_heimdall_process_fixture
 from calamum_vulcan.fixtures import load_heimdall_pit_fixture
 
 
@@ -62,6 +68,39 @@ def _ready_print_pit_trace():
   return normalize_heimdall_result(
     build_print_pit_command_plan(),
     load_heimdall_pit_fixture('pit-print-ready-g991u'),
+  )
+
+
+def _ready_heimdall_detection_trace():
+  return normalize_heimdall_result(
+    build_detect_device_command_plan(),
+    load_heimdall_process_fixture('detect-ready'),
+  )
+
+
+def _no_device_adb_detection_trace():
+  return normalize_android_tools_result(
+    build_adb_detect_command_plan(),
+    AndroidToolsProcessResult(
+      fixture_name='adb-none',
+      operation=AndroidToolsOperation.ADB_DEVICES,
+      backend=AndroidToolsBackend.ADB,
+      exit_code=0,
+      stdout_lines=('List of devices attached',),
+    ),
+  )
+
+
+def _no_device_fastboot_detection_trace():
+  return normalize_android_tools_result(
+    build_fastboot_detect_command_plan(),
+    AndroidToolsProcessResult(
+      fixture_name='fastboot-none',
+      operation=AndroidToolsOperation.FASTBOOT_DEVICES,
+      backend=AndroidToolsBackend.FASTBOOT,
+      exit_code=0,
+      stdout_lines=(),
+    ),
   )
 
 
@@ -139,6 +178,33 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertIn('marketing_name="Galaxy S21"', output)
     self.assertIn('live_info posture="captured"', output)
     self.assertIn('live_capability="bounded_info_snapshot_ready"', output)
+    self.assertIn('live_path ownership="native"', output)
+
+  def test_render_control_trace_surfaces_fastboot_fallback_path_identity(self) -> None:
+    trace = normalize_android_tools_result(
+      build_fastboot_detect_command_plan(),
+      AndroidToolsProcessResult(
+        fixture_name='fastboot-ready',
+        operation=AndroidToolsOperation.FASTBOOT_DEVICES,
+        backend=AndroidToolsBackend.FASTBOOT,
+        exit_code=0,
+        stdout_lines=('FASTBOOT123\tfastboot',),
+      ),
+    )
+
+    live_detection = build_live_detection_session(
+      trace,
+      fallback_posture=LiveFallbackPosture.ENGAGED,
+      fallback_reason='ADB did not establish a live device; fastboot captured the active companion.',
+      source_labels=('adb', 'fastboot'),
+    )
+
+    output = _render_control_trace(trace, 'text', live_detection=live_detection)
+
+    self.assertIn('live_path ownership="fallback"', output)
+    self.assertIn('path_label="Fastboot Fallback Session"', output)
+    self.assertIn('identity_confidence="serial_only"', output)
+    self.assertIn('live_path_guidance="Treat the current fastboot lane as serial-only identity until richer product truth is available."', output)
 
   def test_adb_detect_runs_bounded_info_enrichment_before_rendering_trace(self) -> None:
     stream = io.StringIO()
@@ -208,6 +274,34 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertIn('inspection_boundary=', output)
     self.assertIn('inspection_pit state="captured"', output)
 
+  def test_inspect_device_can_fall_through_to_heimdall_download_mode_detection(self) -> None:
+    stream = io.StringIO()
+
+    with patch(
+      'calamum_vulcan.app.__main__.execute_android_tools_command',
+      side_effect=(
+        _no_device_adb_detection_trace(),
+        _no_device_fastboot_detection_trace(),
+      ),
+    ) as mocked_android, patch(
+      'calamum_vulcan.app.__main__.execute_heimdall_command',
+      side_effect=(
+        _ready_heimdall_detection_trace(),
+        _ready_print_pit_trace(),
+      ),
+    ) as mocked_heimdall:
+      with redirect_stdout(stream):
+        exit_code = main(['--inspect-device'])
+
+    output = stream.getvalue()
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(mocked_android.call_count, 2)
+    self.assertEqual(mocked_heimdall.call_count, 2)
+    self.assertIn('inspection_live state="detected" source="heimdall"', output)
+    self.assertIn('inspection_live state="detected" source="heimdall" info_state="unavailable"', output)
+    self.assertIn('inspection_pit state="captured"', output)
+    self.assertIn('SM-G991U', output)
+
   def test_inspect_device_can_export_json_evidence_with_inspection_block(self) -> None:
     stream = io.StringIO()
 
@@ -255,6 +349,69 @@ class CliControlSurfaceTests(unittest.TestCase):
       self.assertTrue(payload['inspection']['pit_ran'])
       self.assertTrue(payload['outcome']['export_ready'])
 
+  def test_execute_flash_plan_runs_platform_supervised_safe_path_lane(self) -> None:
+    stream = io.StringIO()
+
+    with redirect_stdout(stream):
+      exit_code = main(
+        [
+          '--execute-flash-plan',
+          '--transport-source', 'heimdall-adapter',
+          '--scenario', 'ready',
+        ]
+      )
+
+    output = stream.getvalue()
+    self.assertEqual(exit_code, 0)
+    self.assertIn('safe_path_result execution_allowed="yes"', output)
+    self.assertIn('ownership="delegated"', output)
+    self.assertIn('transport_state="completed"', output)
+    self.assertIn('safe_path_boundary=', output)
+    self.assertIn('safe_path_command="heimdall flash', output)
+
+  def test_execute_flash_plan_reports_blocked_lane_without_transport(self) -> None:
+    stream = io.StringIO()
+
+    with redirect_stdout(stream):
+      exit_code = main(
+        [
+          '--execute-flash-plan',
+          '--transport-source', 'heimdall-adapter',
+          '--scenario', 'blocked',
+        ]
+      )
+
+    output = stream.getvalue()
+    self.assertEqual(exit_code, 0)
+    self.assertIn('safe_path_result execution_allowed="no"', output)
+    self.assertIn('transport_state="not_invoked"', output)
+    self.assertIn('safe_path_rejected=', output)
+
+  def test_execute_flash_plan_rejects_state_fixture_transport_source(self) -> None:
+    with self.assertRaises(SystemExit) as exit_signal:
+      main(['--execute-flash-plan'])
+
+    self.assertIn('requires --transport-source heimdall-adapter', str(exit_signal.exception))
+
+  def test_execute_flash_plan_can_render_json_result(self) -> None:
+    stream = io.StringIO()
+
+    with redirect_stdout(stream):
+      exit_code = main(
+        [
+          '--execute-flash-plan',
+          '--transport-source', 'heimdall-adapter',
+          '--scenario', 'ready',
+          '--control-format', 'json',
+        ]
+      )
+
+    payload = json.loads(stream.getvalue())
+    self.assertEqual(exit_code, 0)
+    self.assertTrue(payload['execution_allowed'])
+    self.assertEqual(payload['authority']['ownership'], 'delegated')
+    self.assertEqual(payload['transport']['state'], 'completed')
+
   def test_read_side_close_bundle_serializes_from_cli(self) -> None:
     stream = io.StringIO()
 
@@ -278,6 +435,35 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertEqual(
       scenario_map['fallback-exhausted-review']['inspection_posture'],
       'failed',
+    )
+
+  def test_safe_path_close_bundle_serializes_from_cli(self) -> None:
+    stream = io.StringIO()
+
+    with redirect_stdout(stream):
+      exit_code = main(
+        [
+          '--integration-suite', 'safe-path-close',
+          '--suite-format', 'json',
+          '--captured-at-utc', '2026-04-21T23:20:00Z',
+        ]
+      )
+
+    payload = json.loads(stream.getvalue())
+    scenario_map = {scenario['scenario_id']: scenario for scenario in payload['scenarios']}
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(payload['suite_name'], 'safe-path-close')
+    self.assertEqual(payload['release_version'], '0.4.0')
+    self.assertEqual(scenario_map['read-pit-required-review']['gate_label'], 'Gate Blocked')
+    self.assertEqual(scenario_map['safe-path-ready-review']['live_source'], 'heimdall')
+    self.assertEqual(
+      dict(scenario_map['safe-path-ready-review']['action_states'])['Execute flash plan'],
+      'next',
+    )
+    self.assertEqual(
+      dict(scenario_map['safe-path-runtime-complete']['action_states'])['Export evidence'],
+      'next',
     )
 
   def test_gui_main_survives_missing_console_streams(self) -> None:

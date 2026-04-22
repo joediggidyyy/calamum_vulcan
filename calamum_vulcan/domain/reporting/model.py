@@ -22,6 +22,7 @@ REQUIRED_SESSION_REPORT_FIELDS = (
   'session_phase',
   'summary',
   'host',
+  'authority',
   'inspection',
   'device',
   'pit',
@@ -52,6 +53,43 @@ class HostEnvironmentEvidence:
 
 
 @dataclass(frozen=True)
+class SessionAuthorityEvidence:
+  """Authoritative launch-state snapshot exported with one session report."""
+
+  schema_version: str
+  posture: str
+  reviewed_phase: str
+  reviewed_phase_label: str
+  reviewed_target_label: str
+  reviewed_phase_tone: str
+  live_phase_label: str
+  live_phase_tone: str
+  selected_launch_path: str
+  selected_launch_path_label: str
+  ownership: str
+  readiness: str
+  fallback_active: bool
+  block_reason: Optional[str] = None
+  refresh_state: str = 'fresh'
+  refresh_reason: Optional[str] = None
+  summary: str = ''
+
+
+@dataclass(frozen=True)
+class LivePathIdentityEvidence:
+  """Repo-owned identity surface for one native, delegated, or fallback lane."""
+
+  schema_version: str = '0.4.0-fs4-04'
+  ownership: str = 'none'
+  path_label: str = 'No Live Path'
+  delegated_path_label: str = 'none'
+  mode_label: str = 'No Live Mode'
+  identity_confidence: str = 'unavailable'
+  summary: str = 'No live or fallback identity is currently active.'
+  operator_guidance: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class InspectionWorkflowEvidence:
   """Inspect-only read-side workflow posture carried into reporting."""
 
@@ -75,6 +113,9 @@ class LiveDeviceEvidence:
   state: str
   summary: str
   source: Optional[str]
+  path_identity: LivePathIdentityEvidence = field(
+    default_factory=LivePathIdentityEvidence
+  )
   source_labels: Tuple[str, ...] = ()
   fallback_posture: str = 'not_needed'
   fallback_reason: Optional[str] = None
@@ -288,6 +329,7 @@ class SessionEvidenceReport:
   session_phase: str
   summary: str
   host: HostEnvironmentEvidence
+  authority: SessionAuthorityEvidence
   inspection: InspectionWorkflowEvidence
   device: DeviceEvidence
   pit: PitEvidence
