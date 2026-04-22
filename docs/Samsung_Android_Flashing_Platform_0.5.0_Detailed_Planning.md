@@ -37,7 +37,7 @@ This contract pins the sprint grammar so temporary incompleteness does not get m
 Replace external `heimdall detect` with native USB descriptor parsing for Samsung download-mode identification.
 - **Execution Strategy:** Implement `pyusb` (a pure-Python wrapper around `libusb-1.0`). This guarantees cross-platform independence and avoids OS-specific workarounds (e.g., Windows WMI) mapping directly to how LOKE and Heimdall manage transport.
 - **Future-proofing:** The USB scanner will use a generic vendor/product registry. While targeting Samsung Download Mode (VID `0x04E8`, PID `0x685D`) immediately, this structure lets us expand trivially to Google/Fastboot (VID `0x18D1`) and other Android boundaries later without rewriting the runtime base.
-- **Diagnostic Honesty:** The scanner must explicitly trap OS-level USB access errors (e.g., `NoBackendError` when missing WinUSB drivers on Windows necessitating Zadig, or missing udev rules on Linux) and translate them into actionable GUI prompts/transcript evidence instead of failing silently.
+- **Diagnostic Honesty & Self-Resolution:** The scanner must explicitly trap OS-level USB access errors. Crucially, CodeSentinel principles mandate "no required user action" and "installs should be self-resolving." Rather than generating static Zadig UX instructions on failure, the application will provide a seamless backend remediation (e.g. self-installing WinUSB dependencies dynamically on Windows or pushing udev rules automatically with elevated permissions on Linux), resolving the error state and continuing the flash sequence without failing entirely.
 - **Demotion:** The existing `BoundHeimdallWorker` polling step will be pushed to an explicit `oracle_check` fallback lane.
 
 ### Lane B: PIT Ownership
@@ -54,7 +54,7 @@ Seal the evidence boundary without triggering a PyPI release (deferred to 1.0.0)
 
 ## Identified Gaps & Prerequisites
 Before writing code for `FS5-02`, we must address the following implementation gaps:
-1. **Dependency Addition:** We must update `pyproject.toml` to include `pyusb`.
-2. **Binary Distribution (Windows):** `pyusb` expects a `libusb-1.0.dll` backend. We will need to decide if we package this DLL into the wheel or rely on the user to provide it. The recommendation is to package a known-good `libusb-1.0` dynamically linked library within the `.whl` payload to guarantee the standalone nature of the platform while leaving drivers to Zadig.
+1. **Dependency Addition:** We must update `pyproject.toml` to include `pyusb` for direct resolution upon installation.
+2. **Backend Binary Distribution:** `pyusb` needs a `libusb-1.0.dll` backend. We *must* natively bundle this library inside our `.whl` distribution. Relying on user OS systems directly violates self-resolving installs.
 3. **Testing Independence:** We need a mock `pyusb` device context so that CI and `pytest` sweeps do not fail or require real physical Samsung devices to test the `calamum_vulcan.usb` boundaries. 
-4. **Zadig UX Integration:** We will need explicit UX instructions in the application showing users how to push the `libusbK` or `WinUSB` driver via Zadig upon initial fallback failure.
+4. **WinUSB Standalone Injector:** The prior plan of leaving USB drivers to user interaction (e.g. Zadig) is forbidden. CodeSentinel requires that the app resolves dependencies in real-time. We must integrate an automated WinUSB/libusbK injector for Windows deployments and automated udev configurations for Linux, handling elevation silently when necessary.
