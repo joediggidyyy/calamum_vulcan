@@ -18,6 +18,13 @@ Treat this repository root as the canonical working root for build, test, packag
 
 Do not rely on parent-repository paths, parent-only tooling, or machine-local assumptions when changing public-facing surfaces.
 
+## CodeSentinel Zero-Touch Packaging Rules
+
+Contributions must strictly adhere to CodeSentinel's self-resolving and zero-touch installation philosophy:
+- **No Manual Interventions**: Applications must never fail by emitting an error that tells the user to manually install a system dependency (e.g., drivers or DLLs).
+- **Self-Resolving Installs**: All required elements (like `libusb-1.0.dll` or OS-level configurations) must be bundled in the `.whl` and dynamically loaded or installed at runtime.
+- **Cross-Platform Elevation**: If an OS-level change is required (e.g., binding a driver via an injector or setting a `udev` rule), the application must automatically request elevated permissions and execute the remediation in real-time without crashing the workflow.
+
 ## Environment
 
 Use the validated runtime for current development and release-lane execution:
