@@ -33,8 +33,12 @@ This contract pins the sprint grammar so temporary incompleteness does not get m
 
 ## Workstream Blueprint
 
-### Lane A: Detect and Identity
+### Lane A: Detect and Identity (FS5-02 Execution Plan)
 Replace external `heimdall detect` with native USB descriptor parsing for Samsung download-mode identification.
+- **Execution Strategy:** Implement `pyusb` (a pure-Python wrapper around `libusb-1.0`). This guarantees cross-platform independence and avoids OS-specific workarounds (e.g., Windows WMI) mapping directly to how LOKE and Heimdall manage transport.
+- **Future-proofing:** The USB scanner will use a generic vendor/product registry. While targeting Samsung Download Mode (VID `0x04E8`, PID `0x685D`) immediately, this structure lets us expand trivially to Google/Fastboot (VID `0x18D1`) and other Android boundaries later without rewriting the runtime base.
+- **Diagnostic Honesty:** The scanner must explicitly trap OS-level USB access errors (e.g., `NoBackendError` when missing WinUSB drivers on Windows necessitating Zadig, or missing udev rules on Linux) and translate them into actionable GUI prompts/transcript evidence instead of failing silently.
+- **Demotion:** The existing `BoundHeimdallWorker` polling step will be pushed to an explicit `oracle_check` fallback lane.
 
 ### Lane B: PIT Ownership
 Absorb PIT acquisition and parsing. Ensure the system owns the mapping of partition strings to flash regions without relying on Heimdall's stdout format.
@@ -47,3 +51,10 @@ Keep Heimdall available as a parallel validator (where appropriate) but never as
 
 ### Lane E: Package-only Closeout
 Seal the evidence boundary without triggering a PyPI release (deferred to 1.0.0).
+
+## Identified Gaps & Prerequisites
+Before writing code for `FS5-02`, we must address the following implementation gaps:
+1. **Dependency Addition:** We must update `pyproject.toml` to include `pyusb`.
+2. **Binary Distribution (Windows):** `pyusb` expects a `libusb-1.0.dll` backend. We will need to decide if we package this DLL into the wheel or rely on the user to provide it. The recommendation is to package a known-good `libusb-1.0` dynamically linked library within the `.whl` payload to guarantee the standalone nature of the platform while leaving drivers to Zadig.
+3. **Testing Independence:** We need a mock `pyusb` device context so that CI and `pytest` sweeps do not fail or require real physical Samsung devices to test the `calamum_vulcan.usb` boundaries. 
+4. **Zadig UX Integration:** We will need explicit UX instructions in the application showing users how to push the `libusbK` or `WinUSB` driver via Zadig upon initial fallback failure.
