@@ -1,6 +1,23 @@
-# Calamum Vulcan
+# Project: Calamum Vulcan
 
-Samsung-focused open-source Android flashing platform with GUI-first workflows, preflight validation, and audit-ready evidence.
+**Document ID**: `CALAMUM_VULCAN_README_040`  
+**Status**: Public project overview  
+**Owner**: ORACL-Prime  
+**Project**: Calamum Vulcan  
+**Version**: `0.4.0`  
+**Last updated**: 2026-04-22
+
+---
+
+<p align="center">
+  <img src="calamum_vulcan/assets/branding/calamum_logo_color.png" alt="Calamum Logo" width="400">
+  <br>
+  <em>Samsung-focused open-source Android flashing platform</em>
+</p>
+
+## Purpose
+
+**Calamum Vulcan** is a Samsung-focused open-source Android flashing platform with GUI-first workflows, preflight validation, and audit-ready evidence.
 
 ## Current status
 
@@ -21,6 +38,16 @@ Current release posture:
 - live PyPI project: `https://pypi.org/project/calamum-vulcan/`
 - live stable GitHub release: `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.3.0`
 - repository-visible Sprint 4 tag URL: `https://github.com/joediggidyyy/calamum_vulcan/tree/v0.4.0`
+
+## Visual surfaces
+
+These views are presentation surfaces. The underlying evidence and preflight states are the source of truth for the platform.
+
+### Main interface
+<img src="calamum_vulcan/assets/branding/calaumum_vulcan_gui.png" alt="Calamum Vulcan GUI" width="560">
+
+### Session evidence view
+<img src="calamum_vulcan/assets/branding/calamum_vulcan_gui_session_evidence.png" alt="GUI Session Evidence" width="560">
 
 ## Source checkout quickstart
 

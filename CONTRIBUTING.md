@@ -1,5 +1,17 @@
 # Contributing to Calamum Vulcan
 
+**Document ID**: `CALAMUM_VULCAN_CONTRIBUTING_040`  
+**Status**: Public contributing guidelines  
+**Owner**: ORACL-Prime  
+**Project**: Calamum Vulcan  
+**Last updated**: 2026-04-22
+
+---
+
+<p align="center">
+  <img src="calamum_vulcan/assets/branding/polymath_global.png" alt="Polymath Global Logo" width="200">
+</p>
+
 ## Working root
 
 Treat this repository root as the canonical working root for build, test, packaging, and publication work.
