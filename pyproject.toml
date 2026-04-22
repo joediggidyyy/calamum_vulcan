@@ -36,6 +36,7 @@ classifiers = [
 ]
 dependencies = [
   "PySide6>=6.8,<7",
+  "pyusb>=1.2.1",
 ]
 
 [project.optional-dependencies]
@@ -64,5 +65,5 @@ include = ["calamum_vulcan*"]
 exclude = ["tests*", "docs*"]
 
 [tool.setuptools.package-data]
-"calamum_vulcan" = ["assets/branding/*.png"]
+"calamum_vulcan" = ["assets/branding/*.png", "assets/bin/windows/*", "assets/bin/linux/*"]
 "calamum_vulcan.fixtures" = ["package_manifests/*.json"]
