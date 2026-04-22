@@ -1,5 +1,17 @@
 # Changelog
 
+**Document ID**: `CALAMUM_VULCAN_CHANGELOG`  
+**Status**: Public change history  
+**Owner**: ORACL-Prime  
+**Project**: Calamum Vulcan  
+**Last updated**: 2026-04-22
+
+---
+
+<p align="center">
+  <img src="calamum_vulcan/assets/branding/calamum_vulcan_logo.png" alt="Calamum Vulcan Logo" width="200">
+</p>
+
 ## 0.4.0 - 2026-04-22
 
 Local package-only Sprint 4 boundary, moving session authority, bounded safe-path governance, truthful operator workflow progression, and closeout proof into repo-owned surfaces while intentionally deferring public publication.

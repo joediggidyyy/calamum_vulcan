@@ -10,7 +10,7 @@
 ---
 
 <p align="center">
-  <img src="calamum_vulcan/assets/branding/calamum_logo_color.png" alt="Calamum Logo" width="400">
+  <img src="calamum_vulcan/assets/branding/calamum_vulcan_logo.png" alt="Calamum Vulcan Logo" width="400">
   <br>
   <em>Samsung-focused open-source Android flashing platform</em>
 </p>

@@ -1,5 +1,17 @@
 # Security Policy
 
+**Document ID**: `CALAMUM_VULCAN_SECURITY`  
+**Status**: Public vulnerability reporting  
+**Owner**: ORACL-Prime  
+**Project**: Calamum Vulcan  
+**Last updated**: 2026-04-22
+
+---
+
+<p align="center">
+  <img src="calamum_vulcan/assets/branding/polymath_global.png" alt="Polymath Global Logo" width="150">
+</p>
+
 ## Scope
 
 Calamum Vulcan is a Samsung-focused Android flashing platform with GUI-first workflows, package-aware preflight validation, and audit-ready evidence.
