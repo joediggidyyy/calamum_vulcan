@@ -40,9 +40,10 @@ DOCS_ROOT = REPO_ROOT / 'docs'
 PYPROJECT_PATH = REPO_ROOT / 'pyproject.toml'
 README_PATH = REPO_ROOT / 'README.md'
 CHANGELOG_PATH = REPO_ROOT / 'CHANGELOG.md'
-SPRINT4_EVIDENCE_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_0.5.0_Execution_Evidence.md'
-SPRINT4_READINESS_PLAN_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_0.5.0_Testing_and_Readiness_Plan.md'
-SPRINT4_CHECKLIST_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_0.5.0_Closeout_and_Prepackage_Checklist.md'
+SPRINT5_EXECUTION_SURFACE_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_0.5.0_Execution_Surface.md'
+SPRINT5_EVIDENCE_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_0.5.0_Execution_Evidence.md'
+SPRINT5_READINESS_PLAN_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_0.5.0_Testing_and_Readiness_Plan.md'
+SPRINT5_CHECKLIST_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_0.5.0_Closeout_and_Prepackage_Checklist.md'
 READINESS_SUMMARY_PATH = REPO_ROOT / 'temp' / 'fs5_readiness' / 'readiness_summary.json'
 READINESS_SUMMARY_MARKDOWN_PATH = REPO_ROOT / 'temp' / 'fs5_readiness' / 'readiness_summary.md'
 
@@ -51,7 +52,7 @@ SPRINT_LABELS = {
   '0.1.0': 'GUI-first product shell',
   '0.2.0': 'orchestration ownership',
   '0.3.0': 'read-side autonomy',
-  '0.5.0': 'session and safe-path extraction',
+  '0.5.0': 'efficient integrated transport extraction',
 }
 
 
@@ -156,6 +157,32 @@ def _status_key(status: str) -> Tuple[int, str]:
     'implemented': 2,
   }
   return (order.get(status, 99), status)
+
+
+def _build_sprint5_package_boundary_status(
+  package_boundary_aligned: bool,
+  readiness_green: bool,
+) -> str:
+  if not readiness_green:
+    return 'open'
+  if not package_boundary_aligned:
+    return 'partial'
+  return 'implemented'
+
+
+def _has_stale_publication_closeout_claim(text: str) -> bool:
+  return any(
+    needle in text
+    for needle in (
+      'public publication route proves restored trusted publication',
+      'restored trusted publication',
+      'interim token-backed/manual workaround',
+    )
+  )
+
+
+def _has_changelog_entry(changelog_text: str, version: str) -> bool:
+  return '## {version} - '.format(version=version) in changelog_text
 
 
 def _run_command(
@@ -374,8 +401,9 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
   normalizer_text = context['normalizer_text']
   workflow_text = context['workflow_text']
   readiness_summary = context['readiness_summary']
-  readiness_plan_text = context['sprint4_readiness_plan_text']
-  checklist_text = context['sprint4_checklist_text']
+  sprint5_execution_surface_text = context['sprint5_execution_surface_text']
+  readiness_plan_text = context['sprint5_readiness_plan_text']
+  checklist_text = context['sprint5_checklist_text']
   ready_probe = context['ready_view_model_probe']
   blocked_probe = context['blocked_view_model_probe']
   detect_fixture_names = context['detect_fixture_names']
@@ -396,22 +424,31 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
   package_boundary_aligned = (
     str(pyproject['project']['version']) == '0.5.0'
     and 'local package-only Sprint 5 boundary' in readme_text
-    and '## 0.5.0 - 2026-04-22' in changelog_text
+    and _has_changelog_entry(changelog_text, '0.5.0')
   )
   publication_deferral_explicit = (
     'Do **not** publish `0.5.0` to PyPI' in checklist_text
-    and 'immediate post-`0.6.0` `1.0.0` promotion gate' in readme_text
+    and 'immediate post-`0.6.0` `1.0.0` promotion gate' in sprint5_execution_surface_text
     and 'TestPyPI/PyPI rehearsal' in readiness_plan_text
   )
   readiness_green = (
     readiness_summary is not None
     and readiness_summary.get('overall_status') == 'passed'
   )
-  s4_08_status = 'implemented'
-  if not package_boundary_aligned:
-    s4_08_status = 'partial'
-  if not readiness_green:
-    s4_08_status = 'open'
+  s5_08_status = _build_sprint5_package_boundary_status(
+    package_boundary_aligned,
+    readiness_green,
+  )
+  readme_boundary_evidence = (
+    'README now frames `0.5.0` as the current local package-only Sprint 5 boundary while keeping `0.3.0` as the current public stable release.'
+    if 'local package-only Sprint 5 boundary' in readme_text
+    else 'README still frames `0.4.0` as the current local package boundary while keeping `0.3.0` as the current public stable release.'
+  )
+  changelog_boundary_evidence = (
+    'CHANGELOG now includes the local `0.5.0` boundary section.'
+    if _has_changelog_entry(changelog_text, '0.5.0')
+    else 'CHANGELOG currently tops out at `0.4.0`, so the `0.5.0` local boundary has not been sealed in repository metadata yet.'
+  )
 
   criteria = [
     CriterionResult(
@@ -521,7 +558,7 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     ),
     CriterionResult(
       sprint='0.5.0',
-      criterion_id='S4-01',
+      criterion_id='S5-01',
       title='Session-authority and safe-path vocabulary are implemented and consumed',
       status='implemented',
       priority='high',
@@ -541,7 +578,7 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     ),
     CriterionResult(
       sprint='0.5.0',
-      criterion_id='S4-02',
+      criterion_id='S5-02',
       title='Device, package, and PIT alignment hardening is implemented',
       status='implemented',
       priority='high',
@@ -560,7 +597,7 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     ),
     CriterionResult(
       sprint='0.5.0',
-      criterion_id='S4-03',
+      criterion_id='S5-03',
       title='The bounded safe-path execute lane is implemented in the platform-owned CLI path',
       status='implemented',
       priority='high',
@@ -581,7 +618,7 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     ),
     CriterionResult(
       sprint='0.5.0',
-      criterion_id='S4-04',
+      criterion_id='S5-04',
       title='Runtime hygiene and Heimdall detect taxonomy are implemented with explicit failure classes',
       status='implemented',
       priority='high',
@@ -599,7 +636,7 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     ),
     CriterionResult(
       sprint='0.5.0',
-      criterion_id='S4-05',
+      criterion_id='S5-05',
       title='The GUI workflow now reflects the settled Sprint 5 control flow',
       status='implemented',
       priority='high',
@@ -612,7 +649,7 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     ),
     CriterionResult(
       sprint='0.5.0',
-      criterion_id='S4-06',
+      criterion_id='S5-06',
       title='Safe-path closeout evidence and the Sprint 5 readiness orchestrator are implemented',
       status='implemented',
       priority='high',
@@ -634,14 +671,14 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     ),
     CriterionResult(
       sprint='0.5.0',
-      criterion_id='S4-07',
+      criterion_id='S5-07',
       title='Package-only closeout discipline and publication deferral are implemented',
       status='implemented' if publication_deferral_explicit else 'partial',
       priority='high',
       impact='Sprint 5 now closes as a local package boundary while preserving public publication as a later promotion gate instead of pretending unfinished release work is part of the sprint definition.',
       evidence=(
-        'The closeout checklist explicitly says `Do **not** publish `0.5.0` to PyPI`.',
-        'README now distinguishes the local `0.5.0` package-only boundary from the public `0.3.0` release.',
+        'The pre-package checklist explicitly says `Do **not** publish `0.5.0` to PyPI`.',
+        'The Sprint 5 execution surface now defines `0.5.0` as a package-only boundary and defers public promotion to the immediate post-`0.6.0` `1.0.0` gate.',
         'The readiness plan now treats TestPyPI/PyPI rehearsal as deferred carry-forward work rather than Sprint 5 acceptance criteria.',
       ),
       next_actions=(
@@ -650,17 +687,17 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     ),
     CriterionResult(
       sprint='0.5.0',
-      criterion_id='S4-08',
+      criterion_id='S5-08',
       title='The local 0.5.0 package boundary metadata and readiness proof are aligned',
-      status=s4_08_status,
+      status=s5_08_status,
       priority='critical',
-      impact='Sprint 5 closeout is only honest when the repository version, release surfaces, and broad validation evidence all agree on the local package boundary being sealed.',
+      impact='Sprint 5 package-ready posture is only honest when the repository version, release surfaces, and broad validation evidence all agree on the local package boundary candidate.',
       evidence=(
         'pyproject now reports version `{version}`.'.format(
           version=pyproject['project']['version'],
         ),
-        'README now frames `0.5.0` as the local package-only boundary while keeping `0.3.0` as the public release.',
-        'CHANGELOG now includes the local `0.5.0` boundary section.',
+        readme_boundary_evidence,
+        changelog_boundary_evidence,
         'Readiness summary status: `{status}`.'.format(
           status='missing' if readiness_summary is None else readiness_summary.get('overall_status', 'unknown'),
         ),
@@ -668,7 +705,7 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
       next_actions=(
         'Re-run the full Sprint 5 readiness stack until all selected lanes are green.',
       ) if not readiness_green else (
-        'Finish aligning any remaining tracked release surface to the local `0.5.0` boundary if metadata still diverges.',
+        'Align `pyproject.toml`, `README.md`, and `CHANGELOG.md` to the same local `0.5.0` package boundary when the candidate is ready to seal.',
       ) if not package_boundary_aligned else (),
     ),
   ]
@@ -726,27 +763,20 @@ def _build_opportunistic_finds(context: Mapping[str, Any]) -> Tuple[Finding, ...
 
 
 def _build_deviations(context: Mapping[str, Any]) -> Tuple[Finding, ...]:
-  sprint4_evidence_text = context['sprint4_evidence_text']
-  readiness_plan_text = context['sprint4_readiness_plan_text']
+  sprint5_evidence_text = context['sprint5_evidence_text']
+  readiness_plan_text = context['sprint5_readiness_plan_text']
   deviations = []
-  if any(
-    needle in sprint4_evidence_text
-    for needle in (
-      '| `FS5-06` | planned |',
-      '| `FS5-07` | planned |',
-      '| `FS5-08` | planned |',
-    )
-  ):
+  if _has_stale_publication_closeout_claim(sprint5_evidence_text):
     deviations.append(
       Finding(
         finding_id='D-01',
-        title='Sprint 5 evidence ledger still understates implemented work',
+        title='Sprint 5 evidence ledger still pulls public promotion back into scope',
         severity='high',
         category='doc-drift',
-        summary='The local execution-evidence register still understates the current Sprint 5 closeout state.',
+        summary='The evidence ledger still implies restored trusted publication is part of FS5-08 even though Sprint 5 is defined as a package-only boundary.',
         evidence=(
-          'The evidence ledger still contains one or more planned rows for `FS5-06`, `FS5-07`, or `FS5-08`.',
-          'The workspace now generates `safe-path-close`, runs `run_v050_readiness_stack.py`, and exposes the bounded execute lane.',
+          '`Samsung_Android_Flashing_Platform_0.5.0_Execution_Evidence.md` still includes restored-trusted-publication language inside the planned FS5-08 closeout signal.',
+          'The Sprint 5 execution surface and pre-package checklist both define `0.5.0` as a package-only boundary with public promotion deferred to the immediate post-`0.6.0` `1.0.0` gate.',
         ),
       )
     )
@@ -993,9 +1023,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
   readme_text = _read_text(README_PATH)
   changelog_text = _read_text(CHANGELOG_PATH)
   workflow_text = _read_text(WORKFLOW_PATH)
-  sprint4_evidence_text = _read_text(SPRINT4_EVIDENCE_PATH)
-  sprint4_readiness_plan_text = _read_text(SPRINT4_READINESS_PLAN_PATH)
-  sprint4_checklist_text = _read_text(SPRINT4_CHECKLIST_PATH)
+  sprint5_execution_surface_text = _read_text(SPRINT5_EXECUTION_SURFACE_PATH)
+  sprint5_evidence_text = _read_text(SPRINT5_EVIDENCE_PATH)
+  sprint5_readiness_plan_text = _read_text(SPRINT5_READINESS_PLAN_PATH)
+  sprint5_checklist_text = _read_text(SPRINT5_CHECKLIST_PATH)
   qt_shell_text = _read_text(REPO_ROOT / 'calamum_vulcan' / 'app' / 'qt_shell.py')
   normalizer_text = _read_text(REPO_ROOT / 'calamum_vulcan' / 'adapters' / 'heimdall' / 'normalizer.py')
   _append_progress(progress_path, 'loaded_static_text_surfaces')
@@ -1088,9 +1119,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     'readme_text': readme_text,
     'changelog_text': changelog_text,
     'workflow_text': workflow_text,
-    'sprint4_evidence_text': sprint4_evidence_text,
-    'sprint4_readiness_plan_text': sprint4_readiness_plan_text,
-    'sprint4_checklist_text': sprint4_checklist_text,
+    'sprint5_execution_surface_text': sprint5_execution_surface_text,
+    'sprint5_evidence_text': sprint5_evidence_text,
+    'sprint5_readiness_plan_text': sprint5_readiness_plan_text,
+    'sprint5_checklist_text': sprint5_checklist_text,
     'qt_shell_text': qt_shell_text,
     'normalizer_text': normalizer_text,
     'cli_help': cli_help,

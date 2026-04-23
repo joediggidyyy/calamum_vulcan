@@ -32,11 +32,135 @@ from calamum_vulcan.domain.live_device import LiveFallbackPosture
 from calamum_vulcan.domain.live_device import apply_live_device_info_trace
 from calamum_vulcan.domain.live_device import build_heimdall_live_detection_session
 from calamum_vulcan.domain.live_device import build_live_detection_session
+from calamum_vulcan.domain.live_device import build_usb_live_detection_session
 from calamum_vulcan.fixtures import load_heimdall_process_fixture
+from calamum_vulcan.usb import USBDeviceDescriptor
+from calamum_vulcan.usb import USBProbeResult
 
 
 class LiveDeviceContractTests(unittest.TestCase):
   """Prove FS3-03 live detection/info semantics stay repo-owned and explicit."""
+
+  def test_native_usb_probe_builds_supported_download_mode_snapshot(self) -> None:
+    probe_result = USBProbeResult(
+      state='detected',
+      summary='Native USB scan detected a Samsung download-mode device.',
+      devices=(
+        USBDeviceDescriptor(
+          vendor_id=0x04E8,
+          product_id=0x685D,
+          bus=1,
+          address=5,
+          serial_number='usb-g991u-lab-01',
+          manufacturer='Samsung',
+          product_name='Samsung Galaxy S21 (SM-G991U)',
+          product_code='SM-G991U',
+        ),
+      ),
+      notes=('Native USB backend resolved from bundled libusb.',),
+    )
+
+    detection = build_usb_live_detection_session(probe_result)
+
+    self.assertEqual(detection.state, LiveDetectionState.DETECTED)
+    self.assertEqual(detection.source, LiveDeviceSource.USB)
+    self.assertTrue(detection.device_present)
+    self.assertTrue(detection.command_ready)
+    self.assertIsNotNone(detection.snapshot)
+    self.assertEqual(detection.snapshot.mode, 'usb/download')
+    self.assertEqual(detection.snapshot.transport, 'download-mode')
+    self.assertEqual(detection.snapshot.product_code, 'SM-G991U')
+    self.assertEqual(
+      detection.snapshot.support_posture,
+      LiveDeviceSupportPosture.SUPPORTED,
+    )
+    self.assertEqual(detection.snapshot.marketing_name, 'Galaxy S21')
+    self.assertEqual(
+      detection.snapshot.info_state,
+      LiveDeviceInfoState.UNAVAILABLE,
+    )
+    self.assertIn('usb_download_detect', detection.snapshot.capability_hints)
+    self.assertEqual(
+      detection.path_identity.path_label,
+      'Native Download-Mode Session',
+    )
+
+  def test_native_usb_probe_can_clear_after_unified_probe(self) -> None:
+    probe_result = USBProbeResult(
+      state='cleared',
+      summary='Native USB scan did not detect a Samsung download-mode device.',
+      notes=('Native USB backend resolved from bundled libusb.',),
+    )
+
+    detection = build_usb_live_detection_session(
+      probe_result,
+      source_labels=('adb', 'fastboot', 'usb'),
+    )
+
+    self.assertEqual(detection.state, LiveDetectionState.CLEARED)
+    self.assertEqual(detection.source, LiveDeviceSource.USB)
+    self.assertFalse(detection.device_present)
+    self.assertEqual(detection.path_identity.path_label, 'No Download-Mode Device')
+    self.assertIn('Native USB scan did not detect a Samsung download-mode device.', detection.summary)
+
+  def test_native_usb_probe_attention_state_stays_explicit(self) -> None:
+    probe_result = USBProbeResult(
+      state='attention',
+      summary=(
+        'Native USB scan detected a Samsung download-mode device, but richer '
+        'USB identity strings still need operator attention.'
+      ),
+      devices=(
+        USBDeviceDescriptor(
+          vendor_id=0x04E8,
+          product_id=0x685D,
+          bus=1,
+          address=5,
+          serial_number='usb-g991u-lab-02',
+          manufacturer='Samsung',
+          product_name='Samsung Galaxy S21 (SM-G991U)',
+          product_code='SM-G991U',
+          command_ready=False,
+        ),
+      ),
+      notes=('Native USB backend resolved from bundled libusb.',),
+    )
+
+    detection = build_usb_live_detection_session(probe_result)
+
+    self.assertEqual(detection.state, LiveDetectionState.ATTENTION)
+    self.assertEqual(detection.source, LiveDeviceSource.USB)
+    self.assertTrue(detection.device_present)
+    self.assertFalse(detection.command_ready)
+    self.assertEqual(
+      detection.path_identity.path_label,
+      'Native Download-Mode Attention',
+    )
+    self.assertIn('operator attention', detection.summary.lower())
+
+  def test_native_usb_probe_failure_stays_explicit(self) -> None:
+    probe_result = USBProbeResult(
+      state='failed',
+      summary='Native USB detection failed before a trustworthy Samsung download-mode identity could be built.',
+      notes=(
+        'Bundled libusb backend could not be resolved on Windows.',
+      ),
+      remediation_command='powershell.exe -NoProfile -ExecutionPolicy Bypass',
+    )
+
+    detection = build_usb_live_detection_session(
+      probe_result,
+      source_labels=('adb', 'fastboot', 'usb'),
+    )
+
+    self.assertEqual(detection.state, LiveDetectionState.FAILED)
+    self.assertEqual(detection.source, LiveDeviceSource.USB)
+    self.assertFalse(detection.device_present)
+    self.assertEqual(
+      detection.path_identity.path_label,
+      'Native Download-Mode Probe Failed',
+    )
+    self.assertIn('failed before a trustworthy samsung download-mode identity', detection.summary.lower())
 
   def test_heimdall_detect_trace_builds_supported_download_mode_snapshot(self) -> None:
     trace = normalize_heimdall_result(

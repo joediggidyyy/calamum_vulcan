@@ -54,12 +54,14 @@ UNPOPULATED_VALUE = '--'
 LIVE_PHASE_LABELS = {
   LiveDeviceSource.ADB: 'ADB Device Detected',
   LiveDeviceSource.FASTBOOT: 'Fastboot Device Detected',
+  LiveDeviceSource.USB: 'Download-Mode Device Detected',
   LiveDeviceSource.HEIMDALL: 'Download-Mode Device Detected',
 }  # type: Dict[LiveDeviceSource, str]
 
 LIVE_PHASE_ATTENTION_LABELS = {
   LiveDeviceSource.ADB: 'ADB Device Attention',
   LiveDeviceSource.FASTBOOT: 'Fastboot Device Attention',
+  LiveDeviceSource.USB: 'Download-Mode Device Attention',
   LiveDeviceSource.HEIMDALL: 'Download-Mode Device Attention',
 }  # type: Dict[LiveDeviceSource, str]
 
@@ -634,7 +636,7 @@ def _build_device_panel(
   if live_detection.state == LiveDetectionState.FAILED and live_snapshot is None:
     details = [
       'Latest detect: {summary}'.format(summary=live_detection.summary),
-      'Next action: verify adb/fastboot/heimdall availability and rerun Detect device.',
+      'Next action: verify adb/fastboot/native-usb availability and rerun Detect device.',
     ]
     details.extend(_live_path_identity_lines(live_detection))
     details.extend(_live_fallback_lines(live_detection))
@@ -1644,7 +1646,7 @@ def _build_control_actions(
         'Refresh unified live truth across ADB, fastboot, and Samsung '
         'download mode.'
         if detect_completed
-        else 'Probe Samsung live presence and identity across ADB, fastboot, and Heimdall.'
+        else 'Probe Samsung live presence and identity across ADB, fastboot, and the native USB download-mode lane.'
       ),
       state=(
         ControlActionState.COMPLETED
@@ -1661,7 +1663,7 @@ def _build_control_actions(
         if pit_capture_complete
         else 'Capture bounded PIT truth from the current Samsung download-mode session.'
         if download_mode_snapshot is not None
-        else 'Read PIT unlocks only after Detect device finds an active Samsung download-mode session via Heimdall.'
+        else 'Read PIT unlocks only after Detect device finds an active Samsung download-mode session through the native USB lane.'
       ),
       state=(
         ControlActionState.COMPLETED
@@ -1736,12 +1738,14 @@ def _build_control_actions(
 def _download_mode_snapshot(
   session: PlatformSession,
 ) -> Optional[LiveDeviceSnapshot]:
-  """Return the active Heimdall download-mode snapshot when one is present."""
+  """Return the active download-mode snapshot when one is present."""
 
   snapshot = session.live_detection.snapshot
   if snapshot is None:
     return None
-  if snapshot.source != LiveDeviceSource.HEIMDALL or not snapshot.command_ready:
+  if snapshot.source not in (LiveDeviceSource.USB, LiveDeviceSource.HEIMDALL):
+    return None
+  if not snapshot.command_ready:
     return None
   return snapshot
 

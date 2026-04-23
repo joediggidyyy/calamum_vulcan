@@ -1,41 +1,62 @@
-"""
-Mocks for testing `calamum_vulcan.usb` without relying on physical hardware.
-Ensures we adhere to Testing Independence gap (FS5-02).
-"""
+"""Mocks for testing the native USB seam without physical Samsung hardware."""
+
+
+class MockUSBError(Exception):
+    """Synthetic USB-layer error used by unit tests."""
+
 
 class MockDevice:
-    """Simulates a raw pyusb device return structure"""
-    def __init__(self, idVendor, idProduct, bus, address):
+    """Simulate one raw pyusb device object."""
+
+    def __init__(
+        self,
+        idVendor,
+        idProduct,
+        bus,
+        address,
+        serial_number=None,
+        manufacturer=None,
+        product=None,
+    ):
         self.idVendor = idVendor
         self.idProduct = idProduct
         self.bus = bus
         self.address = address
+        self.serial_number = serial_number
+        self.manufacturer = manufacturer
+        self.product = product
+        self.iSerialNumber = 1 if serial_number is not None else 0
+        self.iManufacturer = 2 if manufacturer is not None else 0
+        self.iProduct = 3 if product is not None else 0
+
 
 class MockBackend:
-    """Simulates pyusb backend mapping to bypass OS driver checks."""
-    pass
+    """Simulate a resolved libusb backend handle."""
 
-class MockUSBContext:
-    """
-    Context manager to inject our stub Samsung device (0x04E8:0x685D)
-    into the unit test execution pipeline securely.
-    """
-    def __init__(self, devices):
-        self.devices = devices
-        self.original_find = None
-        
-    def __enter__(self):
-        import usb.core
-        self.original_find = usb.core.find
-        
-        def mock_find(*args, **kwargs):
-            if kwargs.get('find_all') and kwargs.get('idVendor') == 0x04E8 and kwargs.get('idProduct') == 0x685D:
-                return self.devices
-            return []
-            
-        usb.core.find = mock_find
-        return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        import usb.core
-        usb.core.find = self.original_find
+class MockUSBCore:
+    """Minimal ``usb.core`` stand-in used by the scanner tests."""
+
+    def __init__(self, devices=(), error=None):
+        self._devices = tuple(devices)
+        self._error = error
+        self.calls = []
+
+    def find(self, *args, **kwargs):
+        self.calls.append({'args': args, 'kwargs': kwargs})
+        if self._error is not None:
+            raise self._error
+        return tuple(self._devices)
+
+
+class MockUSBUtil:
+    """Minimal ``usb.util`` stand-in used by the scanner tests."""
+
+    @staticmethod
+    def get_string(device, index):
+        mapping = {
+            getattr(device, 'iSerialNumber', 0): getattr(device, 'serial_number', None),
+            getattr(device, 'iManufacturer', 0): getattr(device, 'manufacturer', None),
+            getattr(device, 'iProduct', 0): getattr(device, 'product', None),
+        }
+        return mapping.get(index)

@@ -35,6 +35,8 @@ PYPROJECT_PATH = REPO_ROOT / 'pyproject.toml'
 README_PATH = REPO_ROOT / 'README.md'
 CHANGELOG_PATH = REPO_ROOT / 'CHANGELOG.md'
 PLAN_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_Research_Report_and_Build_Plan.md'
+SPRINT6_EXECUTION_SURFACE_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_0.6.0_Execution_Surface.md'
+SPRINT6_CHECKLIST_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_0.6.0_Execution_Checklist.md'
 APP_MAIN_PATH = REPO_ROOT / 'calamum_vulcan' / 'app' / '__main__.py'
 APP_DEMO_PATH = REPO_ROOT / 'calamum_vulcan' / 'app' / 'demo.py'
 APP_INTEGRATION_PATH = REPO_ROOT / 'calamum_vulcan' / 'app' / 'integration.py'
@@ -97,7 +99,7 @@ class AuditSummary:
   captured_at_utc: str
   repo_root: str
   output_root: str
-  current_public_version: str
+  current_repository_version: str
   target_sprint: str
   criteria: Tuple[CriterionResult, ...]
   opportunistic_finds: Tuple[Finding, ...]
@@ -310,6 +312,8 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
   integration_text = context['integration_text']
   safe_path_text = context['safe_path_text']
   v040_audit_text = context['v040_audit_text']
+  sprint6_execution_surface_text = context['sprint6_execution_surface_text']
+  sprint6_checklist_text = context['sprint6_checklist_text']
   readme_text = context['readme_text']
   changelog_text = context['changelog_text']
   sprint5_doc_matches = context['sprint5_doc_matches']
@@ -326,6 +330,42 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
   safe_path_close = bundles['safe-path-close']
   read_side_scenarios = _scenario_map(read_side_close)
   safe_path_scenarios = _scenario_map(safe_path_close)
+  support_contract_markers = (
+    'detect -> PIT -> package-aligned execution -> transcript/evidence -> recovery/resume',
+    '`integrated-runtime`',
+    'explicit fallback, oracle, migration, or historical delegated lane only',
+  )
+  blocker_inventory_markers = (
+    'Current blocker inventory frozen by `FS6-01`',
+    '`S6-02`',
+    '`S6-03`',
+    '`S6-04`',
+  )
+  support_contract_frozen = all(
+    _contains(sprint6_execution_surface_text, marker)
+    for marker in support_contract_markers
+  )
+  blocker_inventory_frozen = all(
+    _contains(sprint6_checklist_text, marker)
+    for marker in blocker_inventory_markers
+  )
+  integrated_runtime_token_present = 'integrated-runtime' in transport_sources
+  s6_01_status = 'open'
+  if support_contract_frozen or blocker_inventory_frozen or integrated_runtime_token_present:
+    s6_01_status = 'partial'
+  if support_contract_frozen and blocker_inventory_frozen and integrated_runtime_token_present:
+    s6_01_status = 'implemented'
+
+  safe_path_ready_live_source = safe_path_scenarios['safe-path-ready-review']['live_source']
+  shared_cli_native_usb_closed = (
+    'VulcanUSBScanner' in app_main_text
+    and 'build_usb_live_detection_session' in app_main_text
+    and 'build_detect_device_command_plan' not in app_main_text
+    and 'build_heimdall_live_detection_session' not in app_main_text
+  )
+  s6_02_status = 'partial'
+  if safe_path_ready_live_source == 'usb' and shared_cli_native_usb_closed:
+    s6_02_status = 'implemented'
 
   criteria = [
     CriterionResult(
@@ -453,29 +493,28 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     CriterionResult(
       sprint='0.6.0',
       criterion_id='S6-01',
-      title='The no-external-Heimdall supported runtime is still unclosed',
-      status='open',
+      title='Sprint 6 support contract and blocker inventory are now explicitly frozen',
+      status=s6_01_status,
       priority='critical',
-      impact='The plan’s autonomy gate is still unclosed because the supported matrix cannot yet run the normal Samsung path without an external Heimdall dependency in the runtime loop.',
+      impact='The final autonomy push now has one explicit meaning for the supported runtime and one bounded blocker list, which prevents Sprint 6 execution from drifting into another discovery loop.',
       evidence=(
-        'The master plan now says the supported device matrix must deliver a fully functional Calamum-owned integrated Samsung runtime with no required external Heimdall installation by `0.6.0`.',
-        'Current execute-ready control still reports `execution_allowed={allowed}` while the lane is wired to `heimdall-adapter`.'.format(
-          allowed=execute_ready_control['execution_allowed'],
+        'The Sprint 6 execution surface now freezes the supported path as `detect -> PIT -> package-aligned execution -> transcript/evidence -> recovery/resume` with no required external Heimdall installation or standalone Heimdall CLI.',
+        'Transport-source contract tokens now read `{sources}`, with `integrated-runtime` reserved as the canonical supported-path token while `heimdall-adapter` remains the explicit historical delegated lane.'.format(
+          sources='`, `'.join(transport_sources),
         ),
-        'The app main surface still imports Heimdall-backed detect, PIT, and flash commands directly from `adapters.heimdall`.',
+        'The Sprint 6 checklist now records a current blocker inventory for `S6-02` through `S6-04` rather than leaving the opening stack as unbounded discovery.',
       ),
-      next_actions=(
-        'Implement a supported Calamum-owned integrated Samsung runtime that can detect, interrogate, and execute without requiring an external Heimdall installation or standalone Heimdall CLI.',
-        'If Heimdall-derived transport code remains, embed or package it under Calamum ownership rather than exposing Heimdall as an operator-visible prerequisite.',
+      notes=(
+        'FS6-01 freezes the contract and blocker map; it does not by itself claim that the integrated runtime is already implemented.',
       ),
     ),
     CriterionResult(
       sprint='0.6.0',
       criterion_id='S6-02',
-      title='Platform-owned detection and identity are only partially autonomous',
-      status='partial',
+      title='Supported-path Samsung detection and identity now close natively in shared runtime surfaces',
+      status=s6_02_status,
       priority='high',
-      impact='ADB and fastboot read-side ownership exists, but Samsung download-mode identity for the supported matrix still routes through an external Heimdall-backed path.',
+      impact='Sprint 6 can now start the supported Samsung lane through native repo-owned download-mode identity instead of defaulting to an external Heimdall detect seam.',
       evidence=(
         'The `native-adb-package-review` scenario reports live source `{source}`.'.format(
           source=read_side_scenarios['native-adb-package-review']['live_source'],
@@ -483,15 +522,22 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
         'The `fastboot-fallback-review` scenario reports live source `{source}`.'.format(
           source=read_side_scenarios['fastboot-fallback-review']['live_source'],
         ),
-        'The `safe-path-ready-review` scenario still reports Samsung download-mode live source `{source}`.'.format(
-          source=safe_path_scenarios['safe-path-ready-review']['live_source'],
+        'The `safe-path-ready-review` scenario now reports Samsung download-mode live source `{source}`.'.format(
+          source=safe_path_ready_live_source,
         ),
+        'The shared CLI inspect-only path now imports `VulcanUSBScanner` / `build_usb_live_detection_session` and no longer defaults supported-path Samsung identity to Heimdall detect.',
       ),
       next_actions=(
-        'Replace the externally delegated Samsung download-mode detect/identity path with a Calamum-owned integrated path for the supported matrix; embedded Heimdall-derived internals remain acceptable only if the external dependency disappears.',
+        ()
+        if s6_02_status == 'implemented'
+        else (
+          'Replace the externally delegated Samsung download-mode detect/identity path with a Calamum-owned integrated path for the supported matrix; embedded Heimdall-derived internals remain acceptable only if the external dependency disappears.',
+        )
       ),
       notes=(
-        'This is real partial progress, not a green final-frame closeout.',
+        ('FS6-02 closes the supported-path detect/identity blocker while PIT and write/runtime closure remain in `S6-03` and `S6-04`.' ,)
+        if s6_02_status == 'implemented'
+        else ('This is real partial progress, not a green final-frame closeout.',)
       ),
     ),
     CriterionResult(
@@ -507,7 +553,7 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
           alignment=read_side_scenarios['native-adb-package-review']['pit_package_alignment'],
         ),
         'The CLI main surface still imports `build_print_pit_command_plan` and `build_download_pit_command_plan` from `adapters.heimdall`.',
-        'The safe-path ready review still depends on a Heimdall-backed download-mode live source before PIT-capable truth can advance.',
+        'The safe-path ready review now starts from native USB download-mode identity, but bounded PIT capture still runs through Heimdall-backed print-pit / download-pit seams.',
       ),
       next_actions=(
         'Introduce a Calamum-owned integrated PIT acquisition path for the supported Samsung matrix while preserving the current repo-owned comparison/alignment contract.',
@@ -595,6 +641,8 @@ def _build_opportunistic_finds(context: Mapping[str, Any]) -> Tuple[Finding, ...
 
 
 def _build_deviations(context: Mapping[str, Any]) -> Tuple[Finding, ...]:
+  current_repository_version = str(context.get('current_repository_version', '0.5.0'))
+  public_stable_version = str(context.get('public_stable_version', '0.3.0'))
   return (
     Finding(
       finding_id='D-01',
@@ -618,12 +666,25 @@ def _build_deviations(context: Mapping[str, Any]) -> Tuple[Finding, ...]:
     ),
     Finding(
       finding_id='D-03',
-      title='Current public surfaces intentionally lag the local implementation boundary by design',
+      title='Current repository release surfaces intentionally lag the planned Sprint 5 boundary',
       severity='medium',
       category='release-lag',
-      summary='The public repo metadata still lags the local sprint shells, and under the revised roadmap that lag is intentional until the post-`0.6.0` `1.0.0` promotion gate.',
+      summary='The repo-facing metadata now reflects the local `{current_version}` package boundary while the latest public stable release remains `{public_version}`, and under the revised roadmap that split is intentional until any later Sprint 5 repo-visible seal step and the post-`0.6.0` `1.0.0` promotion gate.'.format(
+        current_version=current_repository_version,
+        public_version=public_stable_version,
+      ),
       evidence=(
-        '`pyproject.toml`, `README.md`, and `CHANGELOG.md` all still anchor the public boundary at `0.3.0`.',
+        '`pyproject.toml` currently reports `{version}` as the repository package version.'.format(
+          version=current_repository_version,
+        ),
+        '`README.md` now describes `{version}` as the local package-only Sprint 5 boundary while keeping `{public_version}` as the public stable release.'.format(
+          version=current_repository_version,
+          public_version=public_stable_version,
+        ),
+        '`CHANGELOG.md` now tops out at `{version}`, while `{public_version}` remains preserved as the latest public stable release section.'.format(
+          version=current_repository_version,
+          public_version=public_stable_version,
+        ),
       ),
     ),
   )
@@ -665,7 +726,7 @@ def _render_markdown(summary: AuditSummary) -> str:
     '- captured at: `{captured}`'.format(captured=summary.captured_at_utc),
     '- repo root: `{root}`'.format(root=summary.repo_root),
     '- output root: `{root}`'.format(root=summary.output_root),
-    '- current public version surfaces: `{version}`'.format(version=summary.current_public_version),
+    '- current repository package version: `{version}`'.format(version=summary.current_repository_version),
     '- target sprint: `{target}` — {label}'.format(
       target=summary.target_sprint,
       label=SPRINT_LABELS[summary.target_sprint],
@@ -875,6 +936,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
   readme_text = _read_text(README_PATH)
   changelog_text = _read_text(CHANGELOG_PATH)
   plan_text = _read_text(PLAN_PATH)
+  sprint6_execution_surface_text = _read_text(SPRINT6_EXECUTION_SURFACE_PATH)
+  sprint6_checklist_text = _read_text(SPRINT6_CHECKLIST_PATH)
   app_main_text = _read_text(APP_MAIN_PATH)
   demo_text = _read_text(APP_DEMO_PATH)
   integration_text = _read_text(APP_INTEGRATION_PATH)
@@ -922,7 +985,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     'sprint5_doc_matches': sprint5_doc_matches,
     'sprint6_doc_matches': sprint6_doc_matches,
     'promotion_gate_doc_matches': promotion_gate_doc_matches,
-    'current_public_version': pyproject['project']['version'],
+    'current_repository_version': pyproject['project']['version'],
+    'sprint6_support_contract_markers': {
+      'supported_path_sequence': 'detect -> PIT -> package-aligned execution -> transcript/evidence -> recovery/resume' in sprint6_execution_surface_text,
+      'integrated_runtime_token_present': 'integrated-runtime' in available_transport_sources(),
+      'blocker_inventory_present': 'Current blocker inventory frozen by `FS6-01`' in sprint6_checklist_text,
+    },
     'cli_flags_present': {
       flag: (flag in cli_help)
       for flag in (
@@ -959,6 +1027,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     'readme_text': readme_text,
     'changelog_text': changelog_text,
     'plan_text': plan_text,
+    'sprint6_execution_surface_text': sprint6_execution_surface_text,
+    'sprint6_checklist_text': sprint6_checklist_text,
     'app_main_text': app_main_text,
     'demo_text': demo_text,
     'integration_text': integration_text,
@@ -974,6 +1044,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     'execute_ready_control': execute_ready_control,
     'execute_ready_evidence': execute_ready_evidence,
     'execute_blocked_control': execute_blocked_control,
+    'current_repository_version': str(pyproject['project']['version']),
+    'public_stable_version': '0.3.0',
   }
 
   criteria = _build_criteria(context)
@@ -986,7 +1058,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     captured_at_utc=args.captured_at_utc,
     repo_root=str(REPO_ROOT),
     output_root=str(output_root),
-    current_public_version=str(pyproject['project']['version']),
+    current_repository_version=str(pyproject['project']['version']),
     target_sprint='0.6.0',
     criteria=criteria,
     opportunistic_finds=opportunistic_finds,

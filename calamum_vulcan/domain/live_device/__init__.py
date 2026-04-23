@@ -20,6 +20,7 @@ _LAZY_EXPORTS = {
 	'apply_live_device_info_trace': '.builder',
 	'build_heimdall_live_detection_session': '.builder',
 	'build_live_detection_session': '.builder',
+	'build_usb_live_detection_session': '.builder',
 }
 
 
@@ -55,4 +56,5 @@ __all__ = [
 	'apply_live_device_info_trace',
 	'build_heimdall_live_detection_session',
 	'build_live_detection_session',
+	'build_usb_live_detection_session',
 ]

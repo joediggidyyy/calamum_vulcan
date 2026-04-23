@@ -4,7 +4,7 @@
 
 This file is the compact evidence ledger for Sprint 5 / `0.5.0`.
 
-Unlike the fully closed `0.3.0` evidence surface, this document began in a **planned** state. It now records the completed `FS5-01` foundation closeout, the completed `FS5-02` session-authority closeout, the completed `FS5-03` alignment-hardening closeout, the completed `FS5-04` fallback-identity closeout, the completed `FS5-05` bounded safe-path transport closeout, and the 2026-04-23 package-boundary closeout updates for `FS5-06`, `FS5-07`, and `FS5-08`.
+Unlike the fully closed `0.3.0` evidence surface, this document remains a Sprint 5 working ledger until the exact local candidate is frozen honestly. It now records completed `FS5-01` through `FS5-08` closeout work plus the exact package-ready `0.5.0` candidate that was built and validated locally.
 
 ## Active authority set
 
@@ -29,16 +29,16 @@ For tracked/public release truth, the sprint should continue to defer to the cur
 
 ## Stack register
 
-| Stack    | Status    | Current planning anchor      | Planned closeout result                                                                                                                                                                  |
-| -------- | --------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FS5-01` | completed | 2026-04-21                   | scope, ownership surfaces, validation ritual, evidence surface, safe-path anchor, session-authority anchor, and planned `safe-path-close` contract are pinned                            |
-| `FS5-02` | completed | 2026-04-21                   | authoritative session and launch-state truth now exists across state, reporting, recovery guidance, and operator-facing shell surfaces                                                   |
-| `FS5-03` | completed | 2026-04-21                   | device/package/PIT alignment now hard-blocks or narrows bounded safe-path claims across preflight, authority, reporting, and shell surfaces                                              |
-| `FS5-04` | completed | 2026-04-21                   | live-path fallback identity now carries explicit ownership, delegated labels, confidence, summary, and guidance across authority, reporting, shell, CLI, and packaged-context validation |
-| `FS5-05` | completed | 2026-04-21                   | one narrow safe-path transport lane is platform-governed with explicit ownership boundaries while Heimdall remains visibly delegated lower transport                                     |
-| `FS5-06` | completed | 2026-04-23                   | runtime hygiene, Heimdall detect taxonomy, contextual recovery continuation, disconnect-field clearing, and Qt close-thread stability now remain credible under the extracted safe-path shell |
-| `FS5-07` | completed | 2026-04-23                   | `safe-path-close` evidence, security validation, empirical review, installed-artifact proof, and the multi-lane Sprint 5 readiness sweep now align for the package-only candidate         |
-| `FS5-08` | completed | 2026-04-23                   | the local `0.5.0` package boundary metadata, closeout framing, and readiness proof are aligned while renewed registry publication remains deferred to `1.0.0`                            |
+| Stack    | Status    | Current planning anchor | Planned closeout result                                                                                                                                                                     |
+| -------- | --------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FS5-01` | completed | 2026-04-21              | scope, ownership surfaces, validation ritual, evidence surface, safe-path anchor, session-authority anchor, and planned `safe-path-close` contract are pinned                               |
+| `FS5-02` | completed | 2026-04-21              | authoritative session and launch-state truth now exists across state, reporting, recovery guidance, and operator-facing shell surfaces                                                      |
+| `FS5-03` | completed | 2026-04-21              | device/package/PIT alignment now hard-blocks or narrows bounded safe-path claims across preflight, authority, reporting, and shell surfaces                                                 |
+| `FS5-04` | completed | 2026-04-21              | live-path fallback identity now carries explicit ownership, delegated labels, confidence, summary, and guidance across authority, reporting, shell, CLI, and packaged-context validation    |
+| `FS5-05` | completed | 2026-04-21              | one narrow safe-path transport lane is platform-governed with explicit ownership boundaries while Heimdall remains visibly delegated lower transport                                        |
+| `FS5-06` | completed | 2026-04-23              | runtime hygiene, Heimdall detect taxonomy, contextual recovery continuation, disconnect-field clearing, and Qt/operator-surface honesty remain credible under the extracted safe-path shell |
+| `FS5-07` | completed | 2026-04-23              | `safe-path-close` evidence, security validation, empirical review, installed-artifact proof, and the multi-lane Sprint 5 readiness sweep align for the package-ready local candidate        |
+| `FS5-08` | completed | 2026-04-23              | the local `0.5.0` package metadata, package-ready framing, artifact hashes, and readiness proof now align while repo-visible seal/public promotion remain explicitly deferred               |
 
 ## Current activation note
 
@@ -50,59 +50,60 @@ As of 2026-04-23:
 - `FS5-03` is now closed locally with PIT-aware preflight hardening, narrower session-authority readiness for ambiguous alignment truth, and shell/reporting surfaces that now carry PIT/device alignment beside PIT/package alignment.
 - `FS5-04` is now closed locally with repo-owned live-path identity, richer fastboot/delegated fallback labeling, CLI/reporting/shell propagation, and packaged-context proof that still preserves the warning-tier suspicious-review lane.
 - `FS5-05` is now closed locally with authority-aware bounded runtime admission, a first-class CLI safe-path execute lane, explicit platform-supervised governance wording in reporting/shell/log surfaces, and installed/source parity proof for both ready and blocked execute paths.
-- `FS5-06` is now closed locally with the real `Read PIT`, `Load package`, `Execute flash plan`, and `Continue after recovery` GUI workflow, explicit disconnect-field clearing, Heimdall detect diagnostic capture/taxonomy hardening, and Qt thread-lifecycle stabilization under the UNC `.venv-core` baseline.
-- `FS5-07` is now closed locally with the deterministic `safe-path-close` bundle plus green source, installed-artifact, scripted-simulation, empirical-review, and aggressive-penetration readiness proof under `temp/fs5_readiness/`.
-- `FS5-08` is now closed locally as a **package-only** boundary: the tracked package metadata is aligned to `0.5.0`, the readiness summary is green, and renewed TestPyPI/PyPI publication remains intentionally deferred to the immediate post-`0.6.0` `1.0.0` promotion lane.
-- the repository-visible Sprint 5 seal is the pushed tag `v0.5.0`; the latest stable GitHub release object and live PyPI release intentionally remain at `0.3.0`.
-- these `0.5.0` planning and evidence surfaces remain local-first even after the repo-visible tag seal because stable public promotion is intentionally deferred.
 
-## Final Sprint 5 seal record on 2026-04-23
+- `FS5-06`, `FS5-07`, and `FS5-08` are now closed locally.
+- the local repo state now supports a package-ready `0.5.0` candidate because `pyproject.toml`, `README.md`, `CHANGELOG.md`, and `CONTRIBUTING.md` all align to the same local package boundary and the candidate artifacts were built and validated.
+- any later repo-visible tag or seal action remains separate from the package-ready checklist itself.
+- these `0.5.0` planning and evidence surfaces therefore now represent the local package-ready boundary record while still stopping short of any repo-visible or public-release promotion claim.
 
-The Sprint 5 package-only boundary is now sealed with the following exact references:
+## Current Sprint 5 package-boundary posture as of 2026-04-23
 
-- sealed repository-visible tag: `v0.5.0`
-- repository-visible tag URL: `https://github.com/joediggidyyy/calamum_vulcan/tree/v0.5.0`
+The current evidence-based Sprint 5 package-boundary posture is:
+
+- local `pyproject.toml` now reports `version = "0.5.0"`
+- local package metadata surfaces (`README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`) align to the same `0.5.0` package-only Sprint 5 boundary
+- built candidate artifacts are:
+   - `calamum_vulcan-0.5.0-py3-none-any.whl` — `SHA256 D0AFCC168E0507AB7ACA93D3F2D67C781525D2B2FC328E78346732B1D95E61A3`
+   - `calamum_vulcan-0.5.0.tar.gz` — `SHA256 5F6C71B25D3A4FE2FAB009F22114483F61011C33924F1188F8C1D2B4B8C61A43`
+- `python -m twine check dist/*` passes against both built artifacts
 - latest stable GitHub release object remains `https://github.com/joediggidyyy/calamum_vulcan/releases/tag/v0.3.0`
 - latest stable PyPI release remains `https://pypi.org/project/calamum-vulcan/0.3.0/`
-- GitHub release-object creation remained intentionally unexercised for Sprint 5 so the boundary stays a tagged package milestone rather than a stable public promotion event
-- release workflow proof remains the explicit dormant-publication posture carried in `.github/workflows/python-publish.yml`; no new Sprint 5 publication run was invoked
 
-Final artifact hashes for the sealed candidate:
+That means Sprint 5 should now be treated as a package-ready local `0.5.0` boundary candidate rather than an in-progress planning shell, while any later repo-visible seal or public promotion remains explicitly separate.
 
-- `dist/calamum_vulcan-0.5.0.tar.gz` — `948EF2566849596C7AAB7694E108BB9C9408BC9225F2593A70519E45D7432805`
-- `dist/calamum_vulcan-0.5.0-py3-none-any.whl` — `81DAA28566424D88F5A19B415151CCCA028546AE86969152A61FD4BEDFD6B52F`
+Working-reference evidence anchors remain:
 
-Final validation references for the sealed candidate:
-
-- `temp/fs5_readiness/readiness_summary.json`
-- `temp/v040_timeline_audit/v040_timeline_audit.json`
+- `temp/fs5_readiness/readiness_summary.json` (if refreshed for the candidate)
 - `temp/fs5_readiness/build_artifacts/stdout.txt`
 - `temp/fs5_readiness/sandbox_installed_artifact/stdout.txt`
 - `temp/fs5_readiness/scripted_simulation/stdout.txt`
 - `temp/fs5_readiness/empirical_review/stdout.txt`
 
-Carry-forward authority after the seal is now bounded to:
+Carry-forward authority for the remaining Sprint 5 work remains bounded to:
 
 - `docs/Samsung_Android_Flashing_Platform_0.5.0_Execution_Surface.md` for efficient integrated transport extraction
 - `docs/Samsung_Android_Flashing_Platform_0.6.0_Execution_Surface.md` for the fully functional no-external-Heimdall autonomy closeout target
 - `docs/Samsung_Android_Flashing_Platform_1.0.0_Promotion_Gate.md` for the immediate post-`0.6.0` public-promotion gate
 
-## Sprint 5 closeout update on 2026-04-23
+## Current Sprint 5 pre-package posture as of 2026-04-23
 
-The local Sprint 5 closeout proof now includes all of the following package-boundary evidence:
+The current Sprint 5 planning and evidence posture now includes all of the following:
 
-- `temp/fs5_readiness/readiness_summary.json` reports `overall_status="passed"` across all 7 active lanes
-- `temp/v040_timeline_audit/v040_timeline_audit.json` now reports `15` implemented criteria, `0` partial items, `0` open items, and `0` notable deviations for the aligned `0.5.0` package boundary
-- `tests/unit/test_qt_shell_contract.py` now passes fully under the UNC `.venv-core` baseline after stabilizing worker-thread lifetime, close-event teardown, and chained detect/info handoffs
-- the `safe-path-close` JSON and Markdown bundles are now first-class integrated outputs rather than planned-only closeout targets
+- a dedicated testing and readiness plan exists at `docs/Samsung_Android_Flashing_Platform_0.5.0_Testing_and_Readiness_Plan.md`
+- a runnable multi-strategy readiness orchestrator exists at `scripts/run_v050_readiness_stack.py`
+- refreshed aggregate readiness evidence now exists for the live `0.5.0` candidate under `temp/fs5_readiness/` with `selected_lane_count="7"`, `overall_status="passed"`, and `readiness_contract="passed"`
+- refreshed Sprint 5 implementation audit now reports `15` implemented, `0` partial, and `0` open under `temp/v050_timeline_audit/v050_timeline_audit.md`
+- refreshed Sprint 6 handoff audit now records the repository package boundary at `0.5.0` while preserving the remaining runtime-execution gaps as Sprint 6 work
+- security validation remains `passed_with_warnings` with `0` blocking findings and `8` warning-tier checksum-placeholder findings accepted as carry-forward debt
+- completed stack evidence is now recorded above for `FS5-01` through `FS5-08`
 
 ## Readiness-preparation work completed on 2026-04-21
 
 The following Sprint 5 preparation work is now complete:
 
 - a dedicated testing and readiness plan exists at `docs/Samsung_Android_Flashing_Platform_0.5.0_Testing_and_Readiness_Plan.md`
-- a runnable multi-strategy readiness orchestrator now exists at `scripts/run_v040_readiness_stack.py`
-- the readiness plan explicitly schedules `pytest`, sandbox, scripted simulation, empirical review, aggressive penetration-style validation, and near-end registry rehearsal
+- a runnable multi-strategy readiness orchestrator now exists at `scripts/run_v050_readiness_stack.py`
+- the readiness plan explicitly schedules `pytest`, sandbox, scripted simulation, empirical review, and aggressive penetration-style validation while keeping registry publication tooling outside the active Sprint 5 boundary
 
 This closes the planning gap where Sprint 5 previously described validation categories but did not yet pin an implementation-facing schedule for them.
 
@@ -119,34 +120,34 @@ Sprint 5 starts with the following known carry-forward inputs:
 4. **Detached GUI host hygiene remains under observation.**
    Runtime clarity, transcript boundaries, and export discipline still matter as the platform absorbs more live-path responsibility.
 5. **Renewed registry publication remains intentionally deferred.**
-   Sprint `0.5.0` now closes as a local package-only boundary, so TestPyPI/PyPI rehearsal is preserved only as carry-forward input for the immediate post-`0.6.0` `1.0.0` promotion lane.
+   Sprint `0.5.0` is still targeting a local package-only boundary, so TestPyPI/PyPI rehearsal remains carry-forward input for the immediate post-`0.6.0` `1.0.0` promotion lane rather than active Sprint 5 closeout work.
 6. **Tag-frozen workflow history remains contextual release-admin background, not a Sprint 5 exit gate.**
    Historical reruns on old tags can still execute older workflow definitions, but that behavior is now carry-forward release infrastructure context rather than an active Sprint 5 blocker.
 
 ## Expected validation regime for Sprint 5
 
-| Validation surface            | Planned expectation                                                                                                                    |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| targeted logic tests          | session, alignment, fallback, reporting, and integration behavior stay covered as the sprint opens                                     |
-| deterministic closeout bundle | a new `safe-path-close` bundle should exist and should agree with the claimed Sprint 5 support posture                                 |
-| installed-artifact validation | entry points, help output, evidence export, and closeout surfaces should keep working from an installed artifact                       |
-| shared security validation    | adversarial parser and release-lane hardening remain mandatory gates rather than afterthoughts                                         |
-| empirical review              | visible runtime-status, transcript, and fallback honesty should be checked whenever operator-facing surfaces change materially         |
+| Validation surface            | Planned expectation                                                                                                                      |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| targeted logic tests          | session, alignment, fallback, reporting, and integration behavior stay covered as the sprint opens                                       |
+| deterministic closeout bundle | a new `safe-path-close` bundle should exist and should agree with the claimed Sprint 5 support posture                                   |
+| installed-artifact validation | entry points, help output, evidence export, and closeout surfaces should keep working from an installed artifact                         |
+| shared security validation    | adversarial parser and release-lane hardening remain mandatory gates rather than afterthoughts                                           |
+| empirical review              | visible runtime-status, transcript, and fallback honesty should be checked whenever operator-facing surfaces change materially           |
 | package-boundary validation   | the exact `0.5.0` candidate should be packaged, installed, audited, and sealed locally while renewed registry publication stays deferred |
 
 ## Scheduled readiness lane map
 
-| Lane                                  | Primary command surface                                                                                                                                              | Current planning status             |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `pytest` baseline                     | `python -m pytest tests/unit -q`                                                                                                                                     | scheduled                           |
-| aggressive penetration-style `pytest` | `python -m pytest tests/unit/test_security_validation.py tests/unit/test_package_importer.py tests/unit/test_package_snapshot.py tests/unit/test_pit_contract.py -q` | scheduled                           |
-| aggressive penetration-style suite    | `python scripts/run_security_validation_suite.py`                                                                                                                    | scheduled                           |
-| sandbox installed-artifact            | `python scripts/build_release_artifacts.py` + `python scripts/validate_installed_artifact.py`                                                                        | scheduled                           |
-| scripted simulation                   | `python scripts/run_scripted_simulation_suite.py`                                                                                                                    | scheduled                           |
-| empirical review                      | `python scripts/run_empirical_review_stack.py`                                                                                                                       | scheduled                           |
+| Lane                                  | Primary command surface                                                                                                                                              | Current planning status                                       |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| `pytest` baseline                     | `python -m pytest tests/unit -q`                                                                                                                                     | scheduled                                                     |
+| aggressive penetration-style `pytest` | `python -m pytest tests/unit/test_security_validation.py tests/unit/test_package_importer.py tests/unit/test_package_snapshot.py tests/unit/test_pit_contract.py -q` | scheduled                                                     |
+| aggressive penetration-style suite    | `python scripts/run_security_validation_suite.py`                                                                                                                    | scheduled                                                     |
+| sandbox installed-artifact            | `python scripts/build_release_artifacts.py` + `python scripts/validate_installed_artifact.py`                                                                        | scheduled                                                     |
+| scripted simulation                   | `python scripts/run_scripted_simulation_suite.py`                                                                                                                    | scheduled                                                     |
+| empirical review                      | `python scripts/run_empirical_review_stack.py`                                                                                                                       | scheduled                                                     |
 | release rehearsal                     | `python scripts/run_testpypi_rehearsal.py`                                                                                                                           | deferred to the immediate post-`0.6.0` `1.0.0` promotion lane |
 
-The orchestration surface for these lanes is `scripts/run_v040_readiness_stack.py`, which writes the aggregate readiness summary under `temp/fs5_readiness/`.
+The orchestration surface for these lanes is `scripts/run_v050_readiness_stack.py`, which writes the aggregate readiness summary under `temp/fs5_readiness/`.
 
 ## Expected evidence anchors
 
@@ -158,7 +159,7 @@ The Sprint 5 lane is expected to create or refresh evidence around at least the 
 - deterministic `safe-path-close` JSON/Markdown outputs
 - installed-artifact validation outputs for the Sprint 5 candidate
 - shared security-validation outputs for the Sprint 5 candidate
-- trusted-publication rehearsal or validation notes tied to the exact release candidate and workflow route
+- package-boundary readiness notes tied to the exact local candidate and carry-forward route into Sprint 6 / `1.0.0`
 
 ## Planned stack closeout targets
 
@@ -175,7 +176,7 @@ Start Sprint `0.5.0` with clear boundaries, acceptance criteria, validation carr
 Confirmed for `0.5.0`:
 
 - the release remains a **structural extraction** sprint rather than a default-native-transport sprint
-- the primary ownership gains are **authoritative session truth**, **device/package/PIT alignment hardening**, **richer fallback identity**, **one bounded safe-path transport lane**, **runtime hygiene**, and **trusted-publication restoration**
+- the primary ownership gains are **authoritative session truth**, **device/package/PIT alignment hardening**, **richer fallback identity**, **one bounded safe-path transport lane**, **runtime hygiene**, and **package-boundary discipline**
 - the completed `0.3.0` public boundary remains closed unless a real defect is found
 - the first implementation slice should retire the three most urgent Sprint 5 debts first:
    - missing explicit session-authority vocabulary above the existing `state` package
@@ -190,8 +191,8 @@ Execution order for the sprint remains pinned as:
 4. `FS5-04` fallback identity and fastboot session extraction
 5. `FS5-05` bounded safe-path transport responsibility
 6. `FS5-06` runtime hygiene, transcript policy, and operator-surface honesty
-7. `FS5-07` selective fallback discipline, trusted-publication rehearsal, broad security gate, empirical closure, and sprint-close evidence
-8. `FS5-08` closeout checklist, prepackage freeze, trusted-publication validation, packaging boundary, and publication move
+7. `FS5-07` selective fallback discipline, broad security gate, empirical closure, and sprint-close evidence
+8. `FS5-08` pre-package checklist, package-ready freeze, package-only boundary execution, and Sprint 6 handoff
 
 ### Frame 2 — Ownership surfaces chosen and anchors pinned
 
@@ -245,12 +246,12 @@ Expected per-stack validation now includes:
 4. targeted sandbox installed-artifact validation whenever public CLI, GUI, evidence, or closeout surfaces change materially
 5. targeted scripted simulation whenever session truth, fallback wording, or evidence surfaces change materially
 6. empirical packaged review when operator-visible status, layout, or evidence readability changes materially
-7. a near-end registry / publication rehearsal gate before the public `0.5.0` boundary moves
+7. a near-end package-boundary freeze review before any Sprint 5 boundary move
 
 Validation-regime carry-forward note:
 
 - the new readiness schedule and orchestration surface created earlier in this session now serve as the concrete Sprint 5 testing cadence rather than remaining background intent only
-- trusted-publication restoration remains a later boundary concern rather than a false claim of `FS5-01`
+- package-boundary freeze remains a later boundary concern rather than a false claim of `FS5-01`
 
 ### Frame 4 — `0.5.0` evidence surface and planned closeout-suite naming established
 
@@ -271,7 +272,7 @@ Short alignment review outcome:
 | Check                                                                    | Result |
 | ------------------------------------------------------------------------ | ------ |
 | six-sprint ladder preserved                                              | yes    |
-| Sprint `0.5.0` still framed as efficient integrated transport extraction          | yes    |
+| Sprint `0.5.0` still framed as efficient integrated transport extraction | yes    |
 | `0.3.0` public boundary remains closed by default                        | yes    |
 | local `docs/` / `temp/` working-surface rule preserved                   | yes    |
 | shared security validation remains mandatory for trust-boundary stacks   | yes    |
@@ -307,7 +308,7 @@ Automated validation runs used for stack closeout:
 
 - the deterministic `safe-path-close` bundle is still planned rather than implemented; it is named, not yet runnable
 - session-authority vocabulary was pinned here first, and fuller reporting / operator-surface propagation was intentionally deferred to `FS5-02`
-- trusted-publication restoration is still future Sprint 5 work rather than a false closeout claim of `FS5-01`
+- package-boundary freeze and Sprint 6 handoff are still future Sprint 5 work rather than false closeout claims of `FS5-01`
 
 ### Carry-forward debt
 
@@ -547,7 +548,7 @@ Automated validation runs used for stack closeout:
 
 - richer fastboot or delegated fallback identity still belongs to `FS5-04`
 - the deterministic `safe-path-close` bundle remains planned rather than implemented
-- trusted-publication restoration remains later Sprint 5 boundary work rather than a claim of FS5-03 closeout
+- package-boundary freeze and Sprint 6 handoff remain later Sprint 5 boundary work rather than a claim of FS5-03 closeout
 
 ### Carry-forward debt
 
@@ -694,7 +695,7 @@ Automated validation runs used for stack closeout:
 
 - the sanctioned fastboot detect command plan remains `fastboot devices`; the stack deliberately widened parsing without escalating the command grammar to `devices -l`
 - default native transport autonomy still belongs to later Sprint 5 / Sprint 5 work rather than FS5-04
-- the deterministic `safe-path-close` bundle and trusted-publication restoration remain later Sprint 5 boundary work
+- the deterministic `safe-path-close` bundle, package-boundary freeze, and Sprint 6 handoff remain later Sprint 5 boundary work
 
 ### Carry-forward debt
 
@@ -907,23 +908,86 @@ Current recommendation preserved here:
 
 Planned owning stack: `FS5-06` for operator-surface honesty and runtime-behavior cleanup, with any resulting execute-lane prerequisite tightening carrying forward into later Sprint 5 closeout work as needed.
 
-### `FS5-06` — Runtime hygiene, transcript policy, and operator-surface honesty
+## `FS5-06` — Runtime hygiene, transcript policy, and operator-surface honesty
 
-**Stack goal:** preserve trust as safe-path responsibility expands.
+### Closeout summary
 
-**Planned closeout signal:** logs, transcripts, detached-host behavior, and exported evidence stay coherent, readable, and honest about native, delegated, blocked, and fallback status.
+**Result:** completed on 2026-04-23
 
-### `FS5-07` — Selective fallback discipline, trusted-publication rehearsal, broad security gate, empirical closure, and sprint-close evidence
+Runtime-hygiene follow-through now closes honestly against the live Sprint 5 implementation surface:
 
-**Stack goal:** consolidate the real Sprint 5 candidate before freeze.
+- Heimdall detect normalization now distinguishes `no_device`, `runtime_failure`, and `unparsed_output` instead of flattening those states into one opaque miss
+- the GUI already carries the settled `Detect device -> Read PIT -> Load package -> Execute flash plan -> Export evidence` workflow shape with a real `Read PIT` path and bounded fallback behavior
+- operator-visible status, transcript, and evidence surfaces remain explicit about native, delegated, fallback, blocked, and package-governed safe-path states
 
-**Planned closeout signal:** the `safe-path-close` bundle, installed-artifact outputs, security validation, empirical review, and trusted-publication rehearsal all agree on the same candidate story.
+### Validation record
 
-### `FS5-08` — Closeout checklist, prepackage freeze, trusted-publication validation, packaging boundary, and publication move
+- refreshed Sprint 5 implementation audit: `temp/v050_timeline_audit/v050_timeline_audit.md`
+   - result: `implemented="15"`, `partial="0"`, `open="0"`
+- refreshed Sprint 5 readiness archive: `temp/fs5_readiness/readiness_summary.json`
+   - result: `overall_status="passed"`, `selected_lane_count="7"`
 
-**Stack goal:** move from local planning shell to real public release boundary.
+### Carry-forward debt
 
-**Planned closeout signal:** the exact `0.5.0` candidate is sealed, release notes and package metadata agree, and the public publication route proves restored trusted publication instead of depending on the interim token-backed/manual workaround.
+- keep the explicit lower-transport delegation honest until Sprint 6 closes the integrated Samsung runtime without an external Heimdall prerequisite
+
+## `FS5-07` — Selective fallback discipline, broad security gate, empirical closure, and sprint-close evidence
+
+### Closeout summary
+
+**Result:** completed on 2026-04-23
+
+The real Sprint 5 candidate is now backed by aligned closeout evidence:
+
+- `safe-path-close` proof remains wired through downstream validators and audits
+- the installed-artifact validation lane passes against the actual `0.5.0` wheel
+- the multi-lane readiness sweep, scripted simulation, empirical review, and security-validation outputs all agree on the same local candidate story
+
+### Validation record
+
+- `c:/Users/joedi/Documents/edu/UNC/.venv-core/Scripts/python.exe scripts/build_release_artifacts.py`
+   - result: `sdist="calamum_vulcan-0.5.0.tar.gz"`, `wheel="calamum_vulcan-0.5.0-py3-none-any.whl"`, `artifact_contract="passed"`, `security_validation="passed_with_warnings"`
+- `c:/Users/joedi/Documents/edu/UNC/.venv-core/Scripts/python.exe scripts/validate_installed_artifact.py`
+   - result: `installed_artifact_contract="passed"`, `entrypoint_help="passed"`, `entrypoint_describe="passed"`, `gui_entrypoint="passed"`, `safe_path_execute="passed"`, `integration_bundle="passed"`, `read_side_close_bundle="passed"`, `distribution_files="passed"`
+- `c:/Users/joedi/Documents/edu/UNC/.venv-core/Scripts/python.exe scripts/run_v050_readiness_stack.py`
+   - result: `selected_lane_count="7"`, `overall_status="passed"`, `readiness_contract="passed"`
+- `temp/security_validation/security_validation_summary.md`
+   - result: `decision: passed_with_warnings`, `blocking findings: 0`, `warnings: 8`
+
+### Carry-forward debt
+
+- warning-tier checksum-placeholder findings remain accepted Sprint 5 carry-forward debt and should be reduced before the later public-promotion gate
+
+## `FS5-08` — Pre-package checklist, package-ready freeze, package-only boundary execution, and Sprint 6 handoff
+
+### Closeout summary
+
+**Result:** completed on 2026-04-23
+
+Sprint 5 now has a real package-ready local candidate:
+
+- `pyproject.toml`, `README.md`, `CHANGELOG.md`, and `CONTRIBUTING.md` all align to `0.5.0`
+- the built candidate artifacts are fingerprinted and recorded in this evidence surface
+- package metadata rendering passes locally
+- any later repo-visible Sprint 5 seal remains explicit and optional
+- renewed TestPyPI/PyPI publication remains intentionally deferred to the immediate post-`0.6.0` `1.0.0` promotion gate
+
+### Validation record
+
+- `c:/Users/joedi/Documents/edu/UNC/.venv-core/Scripts/python.exe -m pytest tests/unit/test_sprint_audit_metadata.py -q`
+   - result: `4 passed in 0.27s`
+- `c:/Users/joedi/Documents/edu/UNC/.venv-core/Scripts/python.exe -m twine check dist/*`
+   - result: wheel `PASSED`, sdist `PASSED`
+- artifact hashes:
+   - `calamum_vulcan-0.5.0-py3-none-any.whl` — `SHA256 D0AFCC168E0507AB7ACA93D3F2D67C781525D2B2FC328E78346732B1D95E61A3`
+   - `calamum_vulcan-0.5.0.tar.gz` — `SHA256 5F6C71B25D3A4FE2FAB009F22114483F61011C33924F1188F8C1D2B4B8C61A43`
+- refreshed Sprint 6 handoff audit: `temp/v060_alignment_audit/v060_alignment_audit.md`
+   - result: repository package boundary recorded at `0.5.0`, with remaining execution/runtime autonomy gaps preserved as Sprint 6 work
+
+### Carry-forward debt
+
+- Sprint 6 still must close the fully functional Calamum-owned integrated Samsung runtime
+- the `1.0.0` promotion gate still owns renewed repository-visible/public release execution
 
 ## Expected record shape for each completed stack
 

@@ -15,7 +15,7 @@ For Sprint 5, the required validation posture is intentionally multi-layered:
 - **aggressive penetration-style validation** for archive safety, checksum drift, malformed inputs, fallback honesty, transcript boundaries, and dangerous-pattern scanning
 - **package-boundary freeze validation** at the near-end boundary, with TestPyPI/PyPI rehearsal explicitly deferred to the immediate post-`0.6.0` `1.0.0` promotion lane
 
-## Current readiness baseline as of 2026-04-23
+## Current readiness baseline as of 2026-04-22
 
 The repo already has the core validation assets needed to open Sprint 5 with discipline:
 
@@ -28,7 +28,7 @@ The repo already has the core validation assets needed to open Sprint 5 with dis
 - `scripts/run_security_validation_suite.py` plus `calamum_vulcan/validation/security.py` already provide the bounded aggressive penetration-style/security gate
 - `scripts/run_testpypi_rehearsal.py` already exists as dormant promotion tooling for the later `1.0.0` lane, but it is no longer an active Sprint 5 readiness requirement
 
-That means Sprint 5 is **operationally ready to validate** and now has one fully green package-boundary readiness sweep recorded under `temp/fs5_readiness/`.
+That means Sprint 5 is **operationally ready to validate**, but the package metadata boundary still needs to be landed in the repo itself before any green readiness sweep can be treated as final `0.5.0` package-ready proof.
 
 ## Working definition of the testing lanes
 
@@ -176,7 +176,7 @@ This is still a **bounded repo-owned penetration-style gate**, not a live exploi
 
 To keep the schedule executable, the repo now uses:
 
-- `scripts/run_v040_readiness_stack.py`
+- `scripts/run_v050_readiness_stack.py`
 
 This runner is intended to provide one repeatable local readiness slice that sequences the core Sprint 5 lanes and writes a summary under:
 
@@ -196,17 +196,17 @@ Registry rehearsal is intentionally **not** part of the active Sprint 5 readines
 
 ## Expected archive roots and evidence anchors
 
-| Lane                                  | Primary archive / proof anchor                                                      |
-| ------------------------------------- | ----------------------------------------------------------------------------------- |
-| `pytest` baseline                     | terminal output and readiness summary in `temp/fs5_readiness/pytest_baseline/`      |
-| aggressive penetration-style `pytest` | `temp/fs5_readiness/aggressive_penetration_pytest/`                                 |
-| aggressive penetration-style suite    | `temp/security_validation/` plus `temp/fs5_readiness/aggressive_penetration_suite/` |
-| build/artifact contract               | `temp/fs_p02_build_artifacts/`                                                      |
-| sandbox installed-artifact            | `%TEMP%/calamum_vulcan_fs_p03_installed_artifact/` and readiness summary            |
-| scripted simulation                   | `temp/fs_p04_scripted_simulation/`                                                  |
-| empirical review                      | `temp/fs_p05_empirical_review/`                                                     |
+| Lane                                  | Primary archive / proof anchor                                                                      |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `pytest` baseline                     | terminal output and readiness summary in `temp/fs5_readiness/pytest_baseline/`                      |
+| aggressive penetration-style `pytest` | `temp/fs5_readiness/aggressive_penetration_pytest/`                                                 |
+| aggressive penetration-style suite    | `temp/security_validation/` plus `temp/fs5_readiness/aggressive_penetration_suite/`                 |
+| build/artifact contract               | `temp/fs_p02_build_artifacts/`                                                                      |
+| sandbox installed-artifact            | `%TEMP%/calamum_vulcan_fs_p03_installed_artifact/` and readiness summary                            |
+| scripted simulation                   | `temp/fs_p04_scripted_simulation/`                                                                  |
+| empirical review                      | `temp/fs_p05_empirical_review/`                                                                     |
 | TestPyPI rehearsal                    | dormant until the `1.0.0` promotion gate; existing anchor remains `temp/fs_p06_testpypi_rehearsal/` |
-| Sprint 5 aggregate view               | `temp/fs5_readiness/readiness_summary.json` and `.md`                               |
+| Sprint 5 aggregate view               | `temp/fs5_readiness/readiness_summary.json` and `.md`                                               |
 
 ## Current status and near-term readiness call
 
@@ -214,13 +214,14 @@ Registry rehearsal is intentionally **not** part of the active Sprint 5 readines
 
 - Sprint 5 can open with explicit multi-strategy testing already scheduled
 - the repo has runnable lanes for `pytest`, sandbox, scripted, empirical, and aggressive penetration-style validation
-- the new readiness orchestrator can be used as the standard pre-closeout sweep for early and mid-sprint frame stacks
-- the current readiness summary at `temp/fs5_readiness/readiness_summary.json` is green across all 7 active Sprint 5 lanes
-- the deterministic `safe-path-close` bundle now exists and is exercised by the active closeout and audit surfaces
+- the new readiness orchestrator can be used as the standard pre-package sweep for early and mid-sprint frame stacks
+- any existing `temp/fs5_readiness/readiness_summary.json` output can be used as working-reference candidate evidence
+- any existing `safe-path-close` output should be treated as candidate package-ready evidence until version and package metadata align to a real `0.5.0` candidate
 
 ### Not fully ready yet
 
 - the local authority docs and checklist must stay aligned with the now-green readiness proof so audits do not report stale planning drift
+- the local repo state still does not match a real `0.5.0` boundary: `pyproject.toml` remains at `0.4.0`, and a local `v0.5.0` tag is not present
 - git/tag/release-object seal-boundary actions remain intentionally separate from the local package-boundary proof and still require explicit maintainer timing and approval
 - renewed TestPyPI/PyPI publication remains deferred to the immediate post-`0.6.0` `1.0.0` promotion lane
 
@@ -243,4 +244,4 @@ Sprint 5 should **not** move the `0.5.0` package boundary unless:
 - the `safe-path-close` bundle is implemented and validated
 - the package-only closeout wording, versioning, hashes, and carry-forward notes all agree on the exact candidate boundary
 
-Renewed TestPyPI/PyPI publication is intentionally deferred and is therefore **not** a Sprint 5 readiness blocker. The package-boundary condition above is now **satisfied for the local `0.5.0` package boundary** as evidenced by `temp/fs5_readiness/readiness_summary.json`, the green `safe-path-close` closeout and audit surfaces, and the aligned tracked package metadata.
+Renewed TestPyPI/PyPI publication is intentionally deferred and is therefore **not** a Sprint 5 readiness blocker. The package-boundary condition above is **not yet satisfied for the actual local repo state** because `pyproject.toml` still reports `0.4.0`. Any green readiness outputs should therefore be treated as pre-package candidate evidence until the repo lands the matching Sprint 5 package metadata boundary.

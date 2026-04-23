@@ -1,0 +1,48 @@
+{
+  "created": "2026-04-23T00:07:25.940988Z",
+  "last_persisted": "2026-04-23T00:07:26.010847Z",
+  "files_cached": 0,
+  "decisions_logged": 0,
+  "tasks_tracked": 0,
+  "stack_depth": 0,
+  "ttl_minutes": 60,
+  "telemetry": {
+    "actions": {
+      "total": 0,
+      "success": 0
+    },
+    "policy": {
+      "violations": 0,
+      "lookups": 0,
+      "lookup_successes": 0
+    },
+    "security": {
+      "cli_injections": 0,
+      "failed_cli_injections": 0,
+      "searches": 0,
+      "brute_force_searches": 0,
+      "script_executions": 0,
+      "failed_script_executions": 0
+    },
+    "cache": {
+      "hits": 0,
+      "requests": 2
+    },
+    "kcs": {
+      "k": 0.57,
+      "c": 1.0,
+      "s": 1.0
+    },
+    "last_activity": "2026-04-23T00:07:25.990065Z",
+    "virtual_start": "2026-04-23T00:07:25.935570Z",
+    "cycle_start": "2026-04-23T00:07:25.935571Z"
+  },
+  "recovery_state": {
+    "active": false,
+    "phase": 0,
+    "clean_streak": 0,
+    "clean_start": null
+  },
+  "last_ops_awareness_at": "2026-04-23T00:07:25.967989Z",
+  "last_ops_awareness_hash": "1448f3a3d9209eaccb2bc9b52e12007ac41797e7adab8c6a8960082df951ffdc"
+}

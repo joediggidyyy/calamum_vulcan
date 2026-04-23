@@ -13,7 +13,7 @@ SAFE_PATH_EVIDENCE_REQUIREMENTS = (
   'deterministic_safe_path_close_bundle',
   'installed_artifact_validation',
   'shared_security_validation',
-  'trusted_publication_rehearsal',
+  'closeout_boundary_alignment_review',
 )
 
 

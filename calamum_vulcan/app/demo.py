@@ -83,7 +83,11 @@ PACKAGE_PIT_FINGERPRINT_FIXTURES = {
   'PIT-G991U-SUSPICIOUS-001': 'pit-print-suspicious-g991u',
 }  # type: Dict[str, str]
 
-TRANSPORT_SOURCES = ('state-fixture', 'heimdall-adapter')
+TRANSPORT_SOURCES = (
+  'state-fixture',
+  'integrated-runtime',
+  'heimdall-adapter',
+)
 DEFAULT_SAFE_PATH_RUNTIME_FIXTURE = 'flash-success'
 
 
@@ -94,7 +98,7 @@ def available_scenarios() -> Tuple[str, ...]:
 
 
 def available_transport_sources() -> Tuple[str, ...]:
-  """Return supported transport sources for demo session assembly."""
+  """Return the Sprint 6 transport-source contract tokens."""
 
   return TRANSPORT_SOURCES
 

@@ -46,6 +46,7 @@ from ..domain.live_device import LiveFallbackPosture
 from ..domain.live_device import apply_live_device_info_trace
 from ..domain.live_device import build_heimdall_live_detection_session
 from ..domain.live_device import build_live_detection_session
+from ..domain.live_device import build_usb_live_detection_session
 from ..domain.package import PackageArchiveImportError
 from ..domain.package import assess_package_archive
 from ..domain.pit import PitInspection
@@ -67,6 +68,8 @@ from ..domain.state import build_inspection_workflow
 from ..domain.state import ensure_safe_path_runtime_ready
 from ..domain.state import inspection_in_progress
 from ..domain.state import replay_events
+from ..usb import USBProbeResult
+from ..usb import VulcanUSBScanner
 from .qt_compat import QT_AVAILABLE
 from .qt_compat import QtCore
 from .qt_compat import QtGui
@@ -146,6 +149,7 @@ else:
   GUI_EVENT_LOOP_HEARTBEAT_MS = 250
   GUI_DISCONNECT_MONITOR_INTERVAL_MS = 1500
   GUI_DISCONNECT_CLEAR_DEBOUNCE_MS = 2500
+  USB_DISCONNECT_MONITOR_COMMAND = 'usb-native-detect'
 
 
   def _write_gui_runtime_diagnostic(
@@ -493,6 +497,21 @@ else:
       self.finished.emit(trace, None)
 
 
+  class _UsbDetectionWorker(QtCore.QObject):
+    """Background worker that runs one native USB detection probe."""
+
+    finished = QtCore.Signal(object, object)
+
+    @QtCore.Slot()
+    def run(self) -> None:
+      try:
+        probe_result = VulcanUSBScanner().probe_download_mode_devices()
+      except Exception as error:  # pragma: no cover - defensive runtime bridge
+        self.finished.emit(None, str(error))
+        return
+      self.finished.emit(probe_result, None)
+
+
   class _DisconnectMonitorWorker(QtCore.QObject):
     """Background worker that silently re-checks whether the active device is still present."""
 
@@ -514,6 +533,8 @@ else:
       try:
         if isinstance(self._command_plan, AndroidToolsCommandPlan):
           trace = execute_android_tools_command(self._command_plan)
+        elif self._command_plan == USB_DISCONNECT_MONITOR_COMMAND:
+          trace = VulcanUSBScanner().probe_download_mode_devices()
         else:
           trace = execute_heimdall_command(self._command_plan)
       except Exception as error:  # pragma: no cover - defensive runtime bridge
@@ -956,6 +977,7 @@ else:
     """Main desktop shell for the FS-03 GUI implementation."""
 
     _live_command_result_ready = QtCore.Signal(object, object, object)
+    _usb_command_result_ready = QtCore.Signal(object, object, object)
     _heimdall_command_result_ready = QtCore.Signal(object, object, object)
     _pit_command_result_ready = QtCore.Signal(object, object, object)
 
@@ -996,6 +1018,10 @@ else:
       self._live_command_worker = None
       self._retained_live_command_objects = []
       self._live_completion_handlers = {}
+      self._usb_command_thread = None
+      self._usb_command_worker = None
+      self._retained_usb_command_objects = []
+      self._usb_completion_handlers = {}
       self._heimdall_command_thread = None
       self._heimdall_command_worker = None
       self._retained_heimdall_command_objects = []
@@ -1011,6 +1037,8 @@ else:
       self._pit_completion_handlers = {}
       self._live_command_in_progress = False
       self._last_live_command_result_on_gui_thread = None
+      self._ui_rebuild_in_progress = False
+      self._ui_rebuild_pending = False
       self._pending_close_after_worker_teardown = False
       self._wait_cursor_active = False
       self._disconnect_monitor_timer = QtCore.QTimer(self)
@@ -1035,6 +1063,10 @@ else:
       )
       self._live_command_result_ready.connect(
         self._handle_live_command_result,
+        QtCore.Qt.ConnectionType.QueuedConnection,
+      )
+      self._usb_command_result_ready.connect(
+        self._handle_usb_command_result,
         QtCore.Qt.ConnectionType.QueuedConnection,
       )
       self._heimdall_command_result_ready.connect(
@@ -1151,10 +1183,19 @@ else:
     def _rebuild_ui(self) -> None:
       """Rebuild the shell widgets at the current zoom level."""
 
-      existing = self.takeCentralWidget()
-      if existing is not None:
-        existing.deleteLater()
-      self._build()
+      if self._ui_rebuild_in_progress:
+        self._ui_rebuild_pending = True
+        return
+
+      self._ui_rebuild_in_progress = True
+      try:
+        self._build()
+      finally:
+        self._ui_rebuild_in_progress = False
+
+      if self._ui_rebuild_pending:
+        self._ui_rebuild_pending = False
+        QtCore.QTimer.singleShot(0, self._rebuild_ui)
 
     def _scaled(self, value: int) -> int:
       """Return a pixel value scaled by the current shell zoom."""
@@ -1347,7 +1388,7 @@ else:
         )
       )
       companion_summary = QtWidgets.QLabel(
-        'Detect device checks ADB, then fastboot, then Samsung download mode via Heimdall. Reboot unlocks after detection.'
+        'Detect device checks ADB, then fastboot, then Samsung download mode through the native USB lane. Reboot unlocks after detection.'
       )
       companion_summary.setWordWrap(True)
       companion_summary.setStyleSheet(control_hint_style(self._ui_scale))
@@ -1729,6 +1770,8 @@ else:
         return build_adb_detect_command_plan(device_serial=snapshot.serial)
       if snapshot.source == LiveDeviceSource.FASTBOOT:
         return build_fastboot_detect_command_plan(device_serial=snapshot.serial)
+      if snapshot.source == LiveDeviceSource.USB:
+        return USB_DISCONNECT_MONITOR_COMMAND
       if snapshot.source == LiveDeviceSource.HEIMDALL:
         return build_detect_device_command_plan()
       return None
@@ -1811,6 +1854,14 @@ else:
           fallback_posture=self._base_session.live_detection.fallback_posture,
           fallback_reason=self._base_session.live_detection.fallback_reason,
           source_labels=self._base_session.live_detection.source_labels,
+        )
+      elif isinstance(trace, USBProbeResult):
+        detection = build_usb_live_detection_session(
+          trace,
+          source_labels=(
+            self._base_session.live_detection.source_labels
+            or ('adb', 'fastboot', 'usb')
+          ),
         )
       elif isinstance(trace, HeimdallNormalizedTrace):
         detection = build_heimdall_live_detection_session(
@@ -1903,6 +1954,10 @@ else:
       self._live_command_thread = None
       self._live_command_worker = None
       self._live_completion_handlers.clear()
+      self._usb_command_thread = None
+      self._usb_command_worker = None
+      self._retained_usb_command_objects = []
+      self._usb_completion_handlers.clear()
       self._heimdall_command_thread = None
       self._heimdall_command_worker = None
       self._heimdall_completion_handlers.clear()
@@ -1929,7 +1984,7 @@ else:
       self._set_live_status(message, 'danger')
 
     def _probe_live_device(self) -> None:
-      """Auto-detect one live companion across ADB, fastboot, and Heimdall."""
+      """Auto-detect one live companion across ADB, fastboot, and native USB."""
 
       try:
         self._start_live_command(
@@ -2018,6 +2073,77 @@ else:
       self._live_command_thread = thread
       self._live_command_worker = worker
       thread.start()
+
+    def _start_usb_detection(
+      self,
+      pending_text: str,
+      completion_handler,
+    ) -> None:
+      """Run one native USB detection probe in a worker thread."""
+
+      if self._live_command_in_progress:
+        self._set_live_status(
+          'Wait for the current live companion action to finish before sending another command.',
+          'warning',
+        )
+        return
+
+      self._disconnect_monitor_timer.stop()
+      self._cancel_pending_disconnect_clear()
+      self._set_live_status(pending_text, 'info')
+      self._append_live_log_lines(
+        ('[COMPANION-PENDING] native_usb_download_detect',)
+      )
+      self._set_live_busy(True)
+
+      thread = QtCore.QThread()
+      worker = _UsbDetectionWorker()
+      command_key = id(worker)
+      self._usb_completion_handlers[command_key] = completion_handler
+      self._retained_usb_command_objects.append((thread, worker, command_key))
+      worker.moveToThread(thread)
+      thread.started.connect(worker.run)
+      worker.finished.connect(
+        lambda probe_result, error_message, command_key=command_key: (
+          self._usb_command_result_ready.emit(
+            command_key,
+            probe_result,
+            error_message,
+          )
+        )
+      )
+      worker.finished.connect(thread.quit)
+      worker.finished.connect(worker.deleteLater)
+      thread.finished.connect(
+        lambda command_key=command_key, thread=thread, worker=worker: (
+          self._finalize_usb_command_thread(command_key, thread, worker)
+        )
+      )
+      thread.finished.connect(thread.deleteLater)
+
+      self._usb_command_thread = thread
+      self._usb_command_worker = worker
+      thread.start()
+
+    def _finalize_usb_command_thread(
+      self,
+      command_key: object,
+      thread,
+      worker,
+    ) -> None:
+      """Release retained native-USB Qt objects only after the thread exits."""
+
+      self._usb_completion_handlers.pop(command_key, None)
+      self._retained_usb_command_objects = [
+        retained
+        for retained in self._retained_usb_command_objects
+        if retained[0] is not thread
+      ]
+      if self._usb_command_thread is thread:
+        self._usb_command_thread = None
+      if self._usb_command_worker is worker:
+        self._usb_command_worker = None
+      self._complete_pending_close_after_worker_teardown()
 
     def _finalize_live_command_thread(
       self,
@@ -2241,6 +2367,57 @@ else:
           self._set_live_status(message, 'danger')
 
     @QtCore.Slot(object, object, object)
+    def _handle_usb_command_result(
+      self,
+      command_key: object,
+      probe_result: object,
+      error_message: object,
+    ) -> None:
+      """Apply one completed native USB detection result on the UI thread."""
+
+      completion_handler = self._usb_completion_handlers.pop(command_key, None)
+      self._set_live_busy(False)
+
+      if error_message:
+        message = str(error_message)
+        self._append_live_log_lines(
+          ('[COMPANION-ERROR] {message}'.format(message=message),)
+        )
+        self._set_live_status(message, 'danger')
+        return
+
+      if not isinstance(probe_result, USBProbeResult):
+        self._set_live_status(
+          'Native USB detection returned an unexpected result shape.',
+          'danger',
+        )
+        return
+
+      self._disconnect_monitor_armed = True
+      self._append_live_log_lines(self._render_usb_probe_lines(probe_result))
+      if completion_handler is not None:
+        try:
+          completion_handler(probe_result)
+        except Exception as error:  # pragma: no cover - defensive GUI guardrail
+          log_path = self._record_live_runtime_failure(
+            'Native USB detection processing',
+            error,
+          )
+          message = (
+            'Native USB detection processing failed after command '
+            'completion: {error_type}: {error}. Details were written to: '
+            '{path}'.format(
+              error_type=type(error).__name__,
+              error=error,
+              path=log_path,
+            )
+          )
+          self._append_live_log_lines(
+            ('[COMPANION-ERROR] {message}'.format(message=message),)
+          )
+          self._set_live_status(message, 'danger')
+
+    @QtCore.Slot(object, object, object)
     def _handle_heimdall_command_result(
       self,
       command_key: object,
@@ -2371,7 +2548,7 @@ else:
         if snapshot is None:
           message = (
             'Read PIT requires an active Samsung download-mode device detected '
-            'via Heimdall. Run Detect device first.'
+            'through the native USB or Heimdall download-mode lane. Run Detect device first.'
           )
           self._append_live_log_lines(
             ('[PIT-READ-BLOCK] {message}'.format(message=message),)
@@ -3052,28 +3229,26 @@ else:
       self._live_fastboot_identity = 'Fastboot: --'
       self._refresh_live_controls()
       pending_text = (
-        'Inspect-only: ADB and fastboot found no live device. Checking Samsung download mode via Heimdall…'
+        'Inspect-only: ADB and fastboot found no live device. Checking Samsung download mode through the native USB lane…'
       )
       if trace.state == AndroidToolsTraceState.FAILED:
         pending_text = (
-          'Inspect-only: fastboot probe failed after ADB missed the device. Checking Samsung download mode via Heimdall…'
+          'Inspect-only: fastboot probe failed after ADB missed the device. Checking Samsung download mode through the native USB lane…'
         )
-      self._start_heimdall_command(
-        build_detect_device_command_plan(),
+      self._start_usb_detection(
         pending_text,
-        self._apply_inspection_heimdall_detection_trace,
+        self._apply_inspection_usb_detection_result,
       )
 
-    def _apply_inspection_heimdall_detection_trace(
+    def _apply_inspection_usb_detection_result(
       self,
-      trace: HeimdallNormalizedTrace,
+      probe_result: USBProbeResult,
     ) -> None:
-      """Continue the inspect-only lane after Heimdall download-mode detection."""
+      """Continue the inspect-only lane after native USB download-mode detection."""
 
-      detection = build_heimdall_live_detection_session(
-        trace,
-        source_labels=('adb', 'fastboot', 'heimdall'),
-        treat_missing_device_as_cleared=True,
+      detection = build_usb_live_detection_session(
+        probe_result,
+        source_labels=('adb', 'fastboot', 'usb'),
       )
       self._set_live_detection(detection)
       self._live_adb_serial = None
@@ -3470,34 +3645,32 @@ else:
       self._clear_live_identity_labels()
       self._refresh_live_controls()
       pending_text = (
-        'ADB and fastboot did not find a live device. Checking Samsung download mode via Heimdall…'
+        'ADB and fastboot did not find a live device. Checking Samsung download mode through the native USB lane…'
       )
       if trace.state == AndroidToolsTraceState.FAILED:
         pending_text = (
-          'ADB did not identify a live device, and the fastboot probe failed. Checking Samsung download mode via Heimdall…'
+          'ADB did not identify a live device, and the fastboot probe failed. Checking Samsung download mode through the native USB lane…'
         )
-      self._start_heimdall_command(
-        build_detect_device_command_plan(),
+      self._start_usb_detection(
         pending_text,
-        self._apply_unified_heimdall_detection_trace,
+        self._apply_unified_usb_detection_result,
       )
 
-    def _apply_unified_heimdall_detection_trace(
+    def _apply_unified_usb_detection_result(
       self,
-      trace: HeimdallNormalizedTrace,
+      probe_result: USBProbeResult,
     ) -> None:
-      """Apply the unified detect flow after the Heimdall download-mode probe."""
+      """Apply the unified detect flow after the native USB download-mode probe."""
 
-      detection = build_heimdall_live_detection_session(
-        trace,
-        source_labels=('adb', 'fastboot', 'heimdall'),
-        treat_missing_device_as_cleared=True,
+      detection = build_usb_live_detection_session(
+        probe_result,
+        source_labels=('adb', 'fastboot', 'usb'),
       )
       self._set_live_detection(detection)
       self._clear_live_identity_labels()
       if detection.snapshot is not None:
         self._set_live_status(
-          '{summary} Active companion: {identity} via Heimdall.'.format(
+          '{summary} Active companion: {identity} via native USB.'.format(
             summary=detection.summary,
             identity=self._live_identity_text(detection.snapshot),
           ),
@@ -3655,6 +3828,8 @@ else:
       retained_threads = [
         retained[0] for retained in self._retained_live_command_objects
       ] + [
+        retained[0] for retained in self._retained_usb_command_objects
+      ] + [
         retained[0] for retained in self._retained_heimdall_command_objects
       ] + [
         retained[0] for retained in self._retained_disconnect_monitor_objects
@@ -3663,6 +3838,7 @@ else:
       ]
       for thread in retained_threads + [
         self._live_command_thread,
+        self._usb_command_thread,
         self._heimdall_command_thread,
         self._disconnect_monitor_thread,
         self._pit_command_thread,
@@ -3685,6 +3861,8 @@ else:
       retained_threads = [
         retained[0] for retained in self._retained_live_command_objects
       ] + [
+        retained[0] for retained in self._retained_usb_command_objects
+      ] + [
         retained[0] for retained in self._retained_heimdall_command_objects
       ] + [
         retained[0] for retained in self._retained_disconnect_monitor_objects
@@ -3693,6 +3871,7 @@ else:
       ]
       for thread in retained_threads + [
         self._live_command_thread,
+        self._usb_command_thread,
         self._heimdall_command_thread,
         self._disconnect_monitor_thread,
         self._pit_command_thread,
@@ -3795,6 +3974,37 @@ else:
         lines.append('[COMPANION-NOTE] {note}'.format(note=note))
       return tuple(lines)
 
+    def _render_usb_probe_lines(
+      self,
+      probe_result: USBProbeResult,
+    ) -> Tuple[str, ...]:
+      """Render one native USB probe result into operational-log lines."""
+
+      lines = [
+        '[COMPANION] native_usb_download_detect',
+        '[COMPANION-RESULT] backend=usb state={state} summary={summary}'.format(
+          state=probe_result.state,
+          summary=probe_result.summary,
+        ),
+      ]
+      for device in probe_result.devices:
+        lines.append(
+          '[COMPANION-DEVICE] serial={serial} state=download transport=download-mode product={product} manufacturer={manufacturer}'.format(
+            serial=device.serial_number,
+            product=(device.product_code or 'unknown'),
+            manufacturer=(device.manufacturer or 'unknown'),
+          )
+        )
+      for note in probe_result.notes[:2]:
+        lines.append('[COMPANION-NOTE] {note}'.format(note=note))
+      if probe_result.remediation_command is not None:
+        lines.append(
+          '[COMPANION-REMEDIATION] {command}'.format(
+            command=probe_result.remediation_command,
+          )
+        )
+      return tuple(lines)
+
     def _render_heimdall_trace_lines(
       self,
       trace: HeimdallNormalizedTrace,
@@ -3870,12 +4080,14 @@ else:
       )
 
     def _current_download_mode_snapshot(self) -> Optional[LiveDeviceSnapshot]:
-      """Return the active Heimdall download-mode snapshot when one is present."""
+      """Return the active download-mode snapshot when one is present."""
 
       snapshot = self._base_session.live_detection.snapshot
       if snapshot is None:
         return None
-      if snapshot.source.value != 'heimdall' or not snapshot.command_ready:
+      if snapshot.source.value not in ('usb', 'heimdall'):
+        return None
+      if not snapshot.command_ready:
         return None
       return snapshot
 

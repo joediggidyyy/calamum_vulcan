@@ -1087,7 +1087,9 @@ def _pit_read_is_next(
   """Return whether bounded PIT capture is the next honest deck step."""
 
   snapshot = session.live_detection.snapshot
-  if snapshot is None or snapshot.source.value != 'heimdall' or not snapshot.command_ready:
+  if snapshot is None or not snapshot.command_ready:
+    return False
+  if snapshot.source.value not in ('usb', 'heimdall'):
     return False
   if pit_inspection is None:
     return True

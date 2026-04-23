@@ -144,12 +144,14 @@ PHASE_TONES = {
 LIVE_PHASE_LABELS = {
   LiveDeviceSource.ADB: 'ADB Device Detected',
   LiveDeviceSource.FASTBOOT: 'Fastboot Device Detected',
+  LiveDeviceSource.USB: 'Download-Mode Device Detected',
   LiveDeviceSource.HEIMDALL: 'Download-Mode Device Detected',
 }
 
 LIVE_PHASE_ATTENTION_LABELS = {
   LiveDeviceSource.ADB: 'ADB Device Attention',
   LiveDeviceSource.FASTBOOT: 'Fastboot Device Attention',
+  LiveDeviceSource.USB: 'Download-Mode Device Attention',
   LiveDeviceSource.HEIMDALL: 'Download-Mode Device Attention',
 }
 
@@ -345,7 +347,10 @@ def _ownership_for_launch_path(
     return SafePathOwnership.DELEGATED
   if (
     session.live_detection.snapshot is not None
-    and session.live_detection.snapshot.source == LiveDeviceSource.ADB
+    and session.live_detection.snapshot.source in (
+      LiveDeviceSource.ADB,
+      LiveDeviceSource.USB,
+    )
     and session.live_detection.command_ready
   ):
     return SafePathOwnership.NATIVE
@@ -591,7 +596,10 @@ def _pit_missing_required(
   snapshot = session.live_detection.snapshot
   if snapshot is None:
     return False
-  return snapshot.source == LiveDeviceSource.HEIMDALL and snapshot.command_ready
+  return snapshot.source in (
+    LiveDeviceSource.USB,
+    LiveDeviceSource.HEIMDALL,
+  ) and snapshot.command_ready
 
 
 def _pit_narrows(pit_inspection: Optional[object]) -> bool:

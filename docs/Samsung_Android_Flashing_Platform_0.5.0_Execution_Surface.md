@@ -21,8 +21,8 @@
    The sprint should optimize for structural progress, not for polishing every intermediate behavior back to a public-ready state.
 3. **Where does Heimdall-derived logic get embedded, and where does Heimdall remain reference, oracle, or fallback rather than active product direction?**
    Any remaining Heimdall use has to be explicit, temporary, and justified against the Sprint 6 target, while embedded reuse stays acceptable only when Calamum owns the packaged runtime boundary.
-4. **What proof is sufficient for a package-only Sprint 5 boundary?**
-   The sprint still needs deterministic evidence, installable artifacts, and honest closeout notes even without renewed registry publication.
+4. **What proof is sufficient for a package-ready Sprint 5 candidate?**
+   The sprint still needs deterministic evidence, installable artifacts, and honest pre-package notes even without renewed registry publication.
 5. **What must be handed forward to `0.6.0` and `1.0.0` without ambiguity?**
    Sprint 5 has to leave a bounded closeout list rather than another open-ended exploration lane.
 
@@ -31,7 +31,7 @@ By the end of this sprint, the platform should be able to say all of the followi
 - Calamum-owned supported-path seams exist for Samsung download-mode detect/identity, PIT acquisition/comparison, and write-path orchestration on the supported lane, even if some internals remain Heimdall-derived
 - no new core feature depends on deeper Heimdall integration than the Sprint 4 posture already carried
 - any remaining Heimdall use is explicit and framed as reference, fallback, migration aid, or regression oracle rather than hidden product authority
-- the `0.5.0` boundary can be sealed as a package-only sprint milestone even if it is not yet the first fully restored polished flashing boundary
+- the `0.5.0` candidate can be marked package-ready as a package-only sprint milestone even if it is not yet the first fully restored polished flashing boundary
 - the remaining gap to `0.6.0` is specific enough to treat Sprint 6 as a closeout sprint rather than another discovery sprint
 
 ## What `0.5.0` is trying to prove
@@ -45,15 +45,15 @@ Sprint 5 is **not** trying to prove that the product is already the final polish
 
 ## Core sprint identity
 
-| Surface | `0.5.0` identity |
-| ------- | ---------------- |
-| version boundary | Sprint 5 / Stage III / `0.5.0` |
-| sprint role | extract the remaining supported-path seams that make a fully functional Calamum-owned integrated runtime achievable in Sprint 6 |
-| autonomy position | deeper than Sprint 4 delegated safe-path extraction, but intentionally allowed to be less polished than the final Sprint 6 supported runtime |
-| primary operator promise | the operator and reviewer can see which Samsung runtime responsibilities are now Calamum-owned, which still remain externally delegated, and where embedded Heimdall-derived logic is being used intentionally rather than hidden |
-| differentiator focus | structural extraction, explicit external-dependency demotion, bounded fallback truth, and honest package-only closure |
-| major carry-forward debt addressed here | detect/PIT/write seam internalization, regression-oracle discipline, and a bounded closeout list for Sprint 6 |
-| explicit non-goal | claiming Sprint 5 is already the first fully restored, fully polished, publicly promoted flashing boundary |
+| Surface                                 | `0.5.0` identity                                                                                                                                                                                                                  |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| version boundary                        | Sprint 5 / Stage III / `0.5.0`                                                                                                                                                                                                    |
+| sprint role                             | extract the remaining supported-path seams that make a fully functional Calamum-owned integrated runtime achievable in Sprint 6                                                                                                   |
+| autonomy position                       | deeper than Sprint 4 delegated safe-path extraction, but intentionally allowed to be less polished than the final Sprint 6 supported runtime                                                                                      |
+| primary operator promise                | the operator and reviewer can see which Samsung runtime responsibilities are now Calamum-owned, which still remain externally delegated, and where embedded Heimdall-derived logic is being used intentionally rather than hidden |
+| differentiator focus                    | structural extraction, explicit external-dependency demotion, bounded fallback truth, and honest package-only closure                                                                                                             |
+| major carry-forward debt addressed here | detect/PIT/write seam internalization, regression-oracle discipline, and a bounded closeout list for Sprint 6                                                                                                                     |
+| explicit non-goal                       | claiming Sprint 5 is already the first fully restored, fully polished, publicly promoted flashing boundary                                                                                                                        |
 
 ## In-scope outcomes
 
@@ -111,24 +111,26 @@ The active local authority set for Sprint 5 should be treated as:
 
 ## Workstream layout for Sprint 5
 
-| Lane | Focus |
-| ---- | ----- |
-| Lane A | supported-path Samsung download-mode detect and identity extraction |
-| Lane B | supported-path PIT acquisition, parsing, and alignment ownership |
-| Lane C | supported-path write-path seam extraction and supervised execution grammar |
+| Lane   | Focus                                                                            |
+| ------ | -------------------------------------------------------------------------------- |
+| Lane A | supported-path Samsung download-mode detect and identity extraction              |
+| Lane B | supported-path PIT acquisition, parsing, and alignment ownership                 |
+| Lane C | supported-path write-path seam extraction and supervised execution grammar       |
 | Lane D | external Heimdall demotion, regression-oracle discipline, and fallback isolation |
-| Lane E | package-only closeout, evidence integrity, and Sprint 6 handoff |
+| Lane E | package-only closeout, evidence integrity, and Sprint 6 handoff                  |
 
 ## Frame-stack decomposition for `0.5.0`
 
-| Stack | Focus | Why it is its own stop point |
-| ----- | ----- | ---------------------------- |
-| `FS5-01` | extraction boundary and acceptable-disruption contract | pins the sprint grammar so temporary incompleteness does not get mistaken for drift |
-| `FS5-02` | supported-path download-mode detect and identity extraction | removes one of the most visible remaining externally Heimdall-owned truths |
-| `FS5-03` | supported-path PIT acquisition and comparison extraction | closes a major autonomy blocker before Sprint 6 |
-| `FS5-04` | supported-path write-path seam and supervised execution grammar | turns Sprint 6 from a discovery sprint into a closeout sprint |
-| `FS5-05` | regression-oracle discipline, fallback isolation, and pre-autonomy proof pack | keeps remaining Heimdall use explicit and bounded |
-| `FS5-06` | package-only closeout and Sprint 6 handoff | seals the version boundary without pretending it is already the public promotion boundary |
+| Stack    | Focus                                                                                              | Why it is its own stop point                                                                      |
+| -------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `FS5-01` | foundation declarations and safe-path acceptance criteria                                          | pins the sprint grammar and ownership surfaces before deeper extraction begins                    |
+| `FS5-02` | session-layer authority and launch-state extraction                                                | makes reviewed/live/fallback launch-state truth authoritative                                     |
+| `FS5-03` | device/package/PIT alignment hardening                                                             | turns descriptive alignment truth into stronger gating before deeper runtime work                 |
+| `FS5-04` | fallback identity and fastboot session extraction                                                  | keeps delegated and fallback lanes explicit as the supported path narrows                         |
+| `FS5-05` | bounded safe-path transport responsibility                                                         | promotes one narrow reviewed execute lane into platform-supervised grammar                        |
+| `FS5-06` | runtime hygiene, transcript policy, and operator-surface honesty                                   | keeps logs, recovery, and GUI/CLI surfaces trustworthy as transport ownership expands             |
+| `FS5-07` | selective fallback discipline, broad security gate, empirical closure, and sprint-close evidence   | consolidates the candidate proof pack before any boundary move                                    |
+| `FS5-08` | pre-package checklist, package-ready freeze, package-only boundary execution, and Sprint 6 handoff | makes package-ready explicit before any later seal step and hands remaining autonomy work forward |
 
 ## Entry criteria
 
@@ -147,7 +149,7 @@ Sprint 5 should not be considered fully closed until all of the following are tr
 - Sprint 5 has not deepened product coupling to Heimdall beyond the carried Sprint 4 posture
 - any remaining external Heimdall usage is explicitly labeled as fallback, oracle, migration aid, or temporary extraction debt, and any embedded Heimdall-derived core is packaged as Calamum-owned runtime implementation rather than external prerequisite
 - the remaining Sprint 6 autonomy list is bounded and concrete
-- the `0.5.0` boundary is sealed with package artifacts, hashes, evidence, and honest carry-forward notes
+- the `0.5.0` candidate is package-ready with package artifacts, hashes, evidence, and honest carry-forward notes, and any later repo-visible seal step remains explicit rather than implied
 - renewed TestPyPI/PyPI publication has remained deferred rather than being quietly pulled back into scope
 
 ## Summary statement

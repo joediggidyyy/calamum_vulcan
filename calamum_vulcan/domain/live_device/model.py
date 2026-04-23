@@ -21,6 +21,7 @@ class LiveDeviceSource(str, Enum):
 
   ADB = 'adb'
   FASTBOOT = 'fastboot'
+  USB = 'usb'
   HEIMDALL = 'heimdall'
 
 

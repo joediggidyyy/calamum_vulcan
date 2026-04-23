@@ -8,6 +8,7 @@
 **Sprint theme:** efficient integrated transport extraction  
 **Current backend posture:** Sprint 4 carried Heimdall as a delegated lower transport. Sprint 5 collapses the external dependency.  
 **Document purpose:** Define the detailed structural extraction contract for Sprint `0.5.0`, including `FS5-01` acceptable-disruption rules.
+**Authority status:** supporting draft only. When this file conflicts with the active Sprint 5 authority set, the canonical surfaces are `Samsung_Android_Flashing_Platform_0.5.0_Execution_Surface.md`, `Samsung_Android_Flashing_Platform_0.5.0_Execution_Evidence.md`, `Samsung_Android_Flashing_Platform_0.5.0_Testing_and_Readiness_Plan.md`, and `Samsung_Android_Flashing_Platform_0.5.0_Closeout_and_Prepackage_Checklist.md`.
 
 ## FS5-01: Extraction Boundary and Acceptable-Disruption Contract
 
@@ -38,6 +39,7 @@ Replace external `heimdall detect` with native USB descriptor parsing for Samsun
 - **Execution Strategy:** Implement `pyusb` (a pure-Python wrapper around `libusb-1.0`). This guarantees cross-platform independence and avoids OS-specific workarounds (e.g., Windows WMI) mapping directly to how LOKE and Heimdall manage transport.
 - **Future-proofing:** The USB scanner will use a generic vendor/product registry. While targeting Samsung Download Mode (VID `0x04E8`, PID `0x685D`) immediately, this structure lets us expand trivially to Google/Fastboot (VID `0x18D1`) and other Android boundaries later without rewriting the runtime base.
 - **Diagnostic Honesty & Self-Resolution:** The scanner must explicitly trap OS-level USB access errors. Crucially, CodeSentinel principles mandate "no required user action" and "installs should be self-resolving." Rather than generating static Zadig UX instructions on failure, the application will provide a seamless backend remediation (e.g. self-installing WinUSB dependencies dynamically on Windows or pushing udev rules automatically with elevated permissions on Linux), resolving the error state and continuing the flash sequence without failing entirely.
+- **Follow-up Correction — Dependency-Set Repair, Not Package Whack-a-Mole:** The runtime self-heal must target the full declared Calamum Vulcan dependency set, not a one-off `pyusb` install. The source of truth is `pyproject.toml`; when the active environment drifts or editable-install metadata goes stale, the bounded repair flow should refresh the package from the source checkout when possible, or reinstall the declared runtime requirements when running from a wheel-only context.
 - **Demotion:** The existing `BoundHeimdallWorker` polling step will be pushed to an explicit `oracle_check` fallback lane.
 
 ### Lane B: PIT Ownership
@@ -54,7 +56,7 @@ Seal the evidence boundary without triggering a PyPI release (deferred to 1.0.0)
 
 ## Identified Gaps & Prerequisites
 Before writing code for `FS5-02`, we must address the following implementation gaps:
-1. **Dependency Addition:** We must update `pyproject.toml` to include `pyusb` for direct resolution upon installation.
+1. **Dependency Contract:** `pyproject.toml` must remain the runtime source of truth, and runtime repair must satisfy the whole declared dependency set rather than treating `pyusb` as a special one-off fix.
 2. **Backend Binary Distribution:** `pyusb` needs a `libusb-1.0.dll` backend. We *must* natively bundle this library inside our `.whl` distribution. Relying on user OS systems directly violates self-resolving installs.
 3. **Testing Independence:** We need a mock `pyusb` device context so that CI and `pytest` sweeps do not fail or require real physical Samsung devices to test the `calamum_vulcan.usb` boundaries. 
 4. **WinUSB Standalone Injector:** The prior plan of leaving USB drivers to user interaction (e.g. Zadig) is forbidden. CodeSentinel requires that the app resolves dependencies in real-time. We must integrate an automated WinUSB/libusbK injector for Windows deployments and automated udev configurations for Linux, handling elevation silently when necessary.

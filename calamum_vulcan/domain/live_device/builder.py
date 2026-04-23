@@ -12,6 +12,7 @@ from calamum_vulcan.adapters.adb_fastboot import AndroidToolsOperation
 from calamum_vulcan.adapters.adb_fastboot import AndroidToolsTraceState
 from calamum_vulcan.adapters.heimdall.model import HeimdallNormalizedTrace
 from calamum_vulcan.domain.device_registry import resolve_device_profile
+from calamum_vulcan.usb import USBProbeResult
 
 from .model import LiveDetectionSession
 from .model import LiveDetectionState
@@ -194,6 +195,72 @@ def build_heimdall_live_detection_session(
   )
 
 
+def build_usb_live_detection_session(
+  probe_result: USBProbeResult,
+  source_labels: Optional[Tuple[str, ...]] = None,
+) -> LiveDetectionSession:
+  """Normalize one native USB probe result into live-device truth."""
+
+  source = LiveDeviceSource.USB
+  considered_sources = source_labels or (source.value,)
+
+  if not probe_result.devices:
+    detection_state = LiveDetectionState.FAILED
+    if probe_result.state == 'cleared':
+      detection_state = LiveDetectionState.CLEARED
+    return LiveDetectionSession(
+      state=detection_state,
+      summary=probe_result.summary,
+      source=source,
+      source_labels=considered_sources,
+      path_identity=_build_path_identity(
+        source,
+        LiveFallbackPosture.NOT_NEEDED,
+        None,
+        detection_state=detection_state,
+      ),
+      notes=_detection_notes(
+        probe_result.notes,
+        LiveFallbackPosture.NOT_NEEDED,
+        None,
+        detection_state=detection_state,
+      ),
+    )
+
+  snapshot = _build_usb_snapshot(probe_result.devices[0])
+  detection_state = LiveDetectionState.DETECTED
+  if probe_result.state == 'attention' or not snapshot.command_ready:
+    detection_state = LiveDetectionState.ATTENTION
+
+  return LiveDetectionSession(
+    state=detection_state,
+    summary=_compose_summary(
+      probe_result.summary,
+      LiveFallbackPosture.NOT_NEEDED,
+      None,
+      snapshot,
+      detection_state,
+    ),
+    source=source,
+    source_labels=considered_sources,
+    snapshot=snapshot,
+    path_identity=_build_path_identity(
+      source,
+      LiveFallbackPosture.NOT_NEEDED,
+      None,
+      snapshot=snapshot,
+      detection_state=detection_state,
+    ),
+    notes=_detection_notes(
+      probe_result.notes,
+      LiveFallbackPosture.NOT_NEEDED,
+      None,
+      snapshot,
+      detection_state,
+    ),
+  )
+
+
 def _first_heimdall_device_payload(
   trace: HeimdallNormalizedTrace,
 ) -> Optional[dict[str, object]]:
@@ -258,6 +325,56 @@ def _build_heimdall_snapshot(
     operator_guidance=_operator_guidance(
       source,
       command_ready,
+      support_posture,
+      info_state,
+    ),
+  )
+
+
+def _build_usb_snapshot(device) -> LiveDeviceSnapshot:
+  source = LiveDeviceSource.USB
+  product_code = getattr(device, 'product_code', None)
+  resolution = resolve_device_profile(product_code)
+  support_posture = LiveDeviceSupportPosture.IDENTITY_INCOMPLETE
+  registry_match_kind = 'unknown'
+  canonical_product_code = None
+  marketing_name = None
+
+  if product_code is not None:
+    registry_match_kind = resolution.match_kind.value
+    canonical_product_code = resolution.canonical_product_code
+    marketing_name = resolution.marketing_name
+    if resolution.known:
+      support_posture = LiveDeviceSupportPosture.SUPPORTED
+    else:
+      support_posture = LiveDeviceSupportPosture.UNPROFILED
+
+  info_state = LiveDeviceInfoState.UNAVAILABLE
+  return LiveDeviceSnapshot(
+    source=source,
+    serial=getattr(device, 'serial_number', 'download-mode-device'),
+    connection_state='download',
+    transport='download-mode',
+    mode='usb/download',
+    command_ready=bool(getattr(device, 'command_ready', True)),
+    product_code=product_code,
+    model_name=(getattr(device, 'product_name', None) if product_code is not None else None),
+    canonical_product_code=canonical_product_code,
+    marketing_name=marketing_name,
+    registry_match_kind=registry_match_kind,
+    support_posture=support_posture,
+    info_state=info_state,
+    manufacturer=getattr(device, 'manufacturer', None),
+    brand=getattr(device, 'manufacturer', None),
+    capability_hints=_capability_hints(
+      source,
+      bool(getattr(device, 'command_ready', True)),
+      support_posture,
+      info_state,
+    ),
+    operator_guidance=_operator_guidance(
+      source,
+      bool(getattr(device, 'command_ready', True)),
       support_posture,
       info_state,
     ),
@@ -553,6 +670,8 @@ def _path_ownership(
     if fallback_posture == LiveFallbackPosture.NEEDED:
       return LivePathOwnership.DELEGATED
     return LivePathOwnership.NATIVE
+  if source == LiveDeviceSource.USB:
+    return LivePathOwnership.NATIVE
   if source == LiveDeviceSource.HEIMDALL:
     return LivePathOwnership.DELEGATED
   if fallback_posture == LiveFallbackPosture.ENGAGED:
@@ -596,9 +715,13 @@ def _path_label(
     if detection_state == LiveDetectionState.FAILED:
       if source == LiveDeviceSource.ADB:
         return 'ADB Probe Failed'
+      if source == LiveDeviceSource.USB:
+        return 'Native Download-Mode Probe Failed'
       if source == LiveDeviceSource.HEIMDALL:
         return 'Heimdall Probe Failed'
       return 'Fastboot Probe Failed'
+    if source == LiveDeviceSource.USB:
+      return 'No Download-Mode Device'
     if source == LiveDeviceSource.HEIMDALL:
       return 'No Download-Mode Device'
     return 'No Live Path'
@@ -606,6 +729,10 @@ def _path_label(
     if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
       return 'ADB Session Attention'
     return 'ADB Native Session'
+  if snapshot.source == LiveDeviceSource.USB:
+    if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
+      return 'Native Download-Mode Attention'
+    return 'Native Download-Mode Session'
   if snapshot.source == LiveDeviceSource.HEIMDALL:
     if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
       return 'Heimdall Download-Mode Attention'
@@ -639,6 +766,10 @@ def _delegated_path_label(
     if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
       return 'adb attention lane'
     return 'native adb session'
+  if snapshot.source == LiveDeviceSource.USB:
+    if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
+      return 'native usb attention lane'
+    return 'native usb download-mode session'
   if snapshot.source == LiveDeviceSource.HEIMDALL:
     if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
       return 'heimdall download-mode attention lane'
@@ -663,9 +794,13 @@ def _path_mode_label(
   if detection_state == LiveDetectionState.FAILED:
     if source == LiveDeviceSource.ADB:
       return 'adb probe failed'
+    if source == LiveDeviceSource.USB:
+      return 'native usb probe failed'
     if source == LiveDeviceSource.HEIMDALL:
       return 'heimdall probe failed'
     return 'fastboot probe failed'
+  if source == LiveDeviceSource.USB:
+    return 'download-mode not detected'
   if source == LiveDeviceSource.HEIMDALL:
     return 'download-mode not detected'
   return 'no live mode'
@@ -698,11 +833,18 @@ def _path_summary(
         'companion after ADB failed to establish one.'
       )
     if detection_state == LiveDetectionState.FAILED:
+      if source == LiveDeviceSource.USB:
+        return (
+          'Native USB detection failed before a trustworthy Samsung '
+          'download-mode identity could be built.'
+        )
       if source == LiveDeviceSource.HEIMDALL:
         return 'Heimdall detection failed before a trustworthy Samsung download-mode identity could be built.'
       return '{source} detection failed before a trustworthy live identity could be built.'.format(
         source=source.value.upper(),
       )
+    if source == LiveDeviceSource.USB:
+      return 'Native USB scan did not capture a Samsung download-mode companion.'
     if source == LiveDeviceSource.HEIMDALL:
       return 'Heimdall did not capture a Samsung download-mode companion.'
     return 'No live or delegated path is currently active.'
@@ -750,6 +892,24 @@ def _path_summary(
       'review while keeping the delegated Samsung download-mode lane explicit.'
     ).format(identity=identity)
 
+  if snapshot.source == LiveDeviceSource.USB:
+    if detection_state == LiveDetectionState.ATTENTION or not snapshot.command_ready:
+      return (
+        'Native USB detection identified {identity}, but the download-mode '
+        'session still needs operator attention before it should be treated '
+        'as command-ready.'
+      ).format(identity=identity)
+    if identity_confidence == LiveIdentityConfidence.SERIAL_ONLY:
+      return (
+        'Native USB download-mode session captured serial {serial}, but '
+        'current identity is still serial-only because the USB descriptors '
+        'did not expose a Samsung product code.'
+      ).format(serial=snapshot.serial)
+    return (
+      'Native USB download-mode session resolved {identity} for repo-owned '
+      'Samsung detection while PIT and flash ownership remain explicitly bounded.'
+    ).format(identity=identity)
+
   if fallback_posture == LiveFallbackPosture.ENGAGED:
     if identity_confidence == LiveIdentityConfidence.SERIAL_ONLY:
       return (
@@ -786,6 +946,15 @@ def _path_guidance(
 
   guidance = []  # type: list[str]
   if snapshot is None:
+    if source == LiveDeviceSource.USB:
+      if detection_state == LiveDetectionState.FAILED:
+        guidance.append(
+          'Resolve the native USB access or bundled libusb backend before trusting Samsung download-mode identity.'
+        )
+      else:
+        guidance.append(
+          'If the device should already be in Samsung download mode, confirm the USB path and rerun Detect device.'
+        )
     if source == LiveDeviceSource.HEIMDALL:
       if detection_state == LiveDetectionState.FAILED:
         guidance.append(
@@ -813,6 +982,13 @@ def _path_guidance(
     )
     guidance.append(
       'Heimdall detection does not provide the richer bounded Android property snapshot that a command-ready ADB session can capture.'
+    )
+  elif snapshot.source == LiveDeviceSource.USB:
+    guidance.append(
+      'Samsung download mode is present through the native USB lane; use Read PIT to gather bounded partition truth before widening any safe-path claim.'
+    )
+    guidance.append(
+      'Native USB detection owns presence and identity, but richer Android property snapshots still require a command-ready ADB session.'
     )
   elif snapshot.source == LiveDeviceSource.FASTBOOT:
     if identity_confidence == LiveIdentityConfidence.SERIAL_ONLY:
@@ -976,6 +1152,19 @@ def _capability_hints(
       )
     else:
       hints.append('adb_authorization_required')
+  elif source == LiveDeviceSource.USB:
+    hints.append('usb_download_detect')
+    if command_ready:
+      hints.extend(
+        (
+          'heimdall_print_pit',
+          'heimdall_download_pit',
+          'download_mode_detected',
+          'adb_required_for_richer_info',
+        )
+      )
+    else:
+      hints.append('usb_access_attention_required')
   elif source == LiveDeviceSource.HEIMDALL:
     hints.append('heimdall_detect')
     if command_ready:
@@ -1029,6 +1218,9 @@ def _operator_guidance(
     guidance.append('Authorize the ADB session before expecting shell-derived device info or reboot controls.')
   if source == LiveDeviceSource.FASTBOOT:
     guidance.append('Fastboot currently exposes only limited read-side identity; richer device info still requires a command-ready ADB session.')
+  if source == LiveDeviceSource.USB:
+    guidance.append('Native USB detection confirms Samsung download mode without relying on an external Heimdall detect subprocess.')
+    guidance.append('Use Read PIT to continue the bounded download-mode review path after native detection succeeds.')
   if source == LiveDeviceSource.HEIMDALL:
     guidance.append('Samsung download mode is present; use PIT review to gather bounded evidence before widening any safe-path claim.')
     guidance.append('Heimdall does not expose the richer bounded Android property snapshot that a command-ready ADB session can capture.')

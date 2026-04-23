@@ -12,6 +12,42 @@
   <img src="calamum_vulcan/assets/branding/calamum_vulcan_logo.png" alt="Calamum Vulcan Logo" width="200">
 </p>
 
+## 0.5.0 - 2026-04-23
+
+Local package-only Sprint 5 boundary for efficient integrated transport extraction, aligning the repository package metadata and package-ready evidence around the extracted Samsung transport lane while continuing to defer public promotion.
+
+### Added
+
+- native USB Samsung download-mode detection and remediation helpers for the supported Windows/Linux packaging lane
+- packaged `libusb`, WinUSB, and `udev` remediation assets for self-resolving USB access on reviewed hosts
+- regression coverage for Sprint 5 audit metadata, native USB detection, and updated live-device/session surfaces
+
+### Changed
+
+- repository package metadata now targets the local `0.5.0` package-only Sprint 5 boundary while the latest public stable release remains `0.3.0`
+- Sprint 5 closeout surfaces now distinguish **package-ready** completion from any later repo-visible seal step
+- installed-artifact validation now derives expected branding assets dynamically from the packaged source set instead of relying on a stale hardcoded subset
+
+### Validated
+
+- the refreshed Sprint 5 readiness archive remains the working multi-lane evidence anchor under `temp/fs5_readiness/`
+- the Sprint 5 implementation audit remains available through `scripts/run_v050_timeline_audit.py`
+- the Sprint 6 handoff audit remains available through `scripts/run_v060_alignment_audit.py`
+
+### Release-boundary status
+
+- current local package boundary: `0.5.0` package-ready candidate with validated local wheel and sdist
+- current latest sealed repository-visible sprint tag boundary: `v0.4.0`
+- latest stable GitHub/PyPI release: `0.3.0`
+- renewed TestPyPI/PyPI publication remains deferred to the immediate post-`0.6.0` `1.0.0` promotion gate
+
+### Known limitations
+
+- the bounded safe-path lane still relies on delegated Heimdall lower transport rather than a fully Calamum-owned integrated Samsung runtime
+- Windows remains the only empirically reviewed packaged host for the local `0.5.0` boundary
+- Qt font packaging still emits a non-blocking warning in some environments
+- warning-tier checksum placeholder debt remains in legacy fixture manifests
+
 ## 0.4.0 - 2026-04-22
 
 Local package-only Sprint 4 boundary, moving session authority, bounded safe-path governance, truthful operator workflow progression, and closeout proof into repo-owned surfaces while intentionally deferring public publication.

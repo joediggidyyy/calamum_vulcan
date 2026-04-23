@@ -29,9 +29,6 @@ from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_fastboot_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
-from calamum_vulcan.adapters.heimdall import HeimdallOperation
-from calamum_vulcan.adapters.heimdall import HeimdallProcessResult
-from calamum_vulcan.adapters.heimdall import build_detect_device_command_plan
 from calamum_vulcan.adapters.heimdall import build_print_pit_command_plan
 from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
 from calamum_vulcan.app.__main__ import gui_main
@@ -41,8 +38,9 @@ from calamum_vulcan.app.__main__ import _render_codesentinel_status_block
 from calamum_vulcan.domain.live_device import LiveFallbackPosture
 from calamum_vulcan.domain.live_device import apply_live_device_info_trace
 from calamum_vulcan.domain.live_device import build_live_detection_session
-from calamum_vulcan.fixtures import load_heimdall_process_fixture
 from calamum_vulcan.fixtures import load_heimdall_pit_fixture
+from calamum_vulcan.usb import USBDeviceDescriptor
+from calamum_vulcan.usb import USBProbeResult
 
 
 def _ready_adb_info_trace():
@@ -71,13 +69,6 @@ def _ready_print_pit_trace():
   )
 
 
-def _ready_heimdall_detection_trace():
-  return normalize_heimdall_result(
-    build_detect_device_command_plan(),
-    load_heimdall_process_fixture('detect-ready'),
-  )
-
-
 def _no_device_adb_detection_trace():
   return normalize_android_tools_result(
     build_adb_detect_command_plan(),
@@ -101,6 +92,61 @@ def _no_device_fastboot_detection_trace():
       exit_code=0,
       stdout_lines=(),
     ),
+  )
+
+
+def _ready_usb_probe_result():
+  return USBProbeResult(
+    state='detected',
+    summary='Native USB scan detected a Samsung download-mode device.',
+    devices=(
+      USBDeviceDescriptor(
+        vendor_id=0x04E8,
+        product_id=0x685D,
+        bus=1,
+        address=5,
+        serial_number='usb-g991u-lab-01',
+        manufacturer='Samsung',
+        product_name='Samsung Galaxy S21 (SM-G991U)',
+        product_code='SM-G991U',
+      ),
+    ),
+    notes=('Native USB backend resolved from bundled libusb.',),
+  )
+
+
+def _attention_usb_probe_result():
+  return USBProbeResult(
+    state='attention',
+    summary=(
+      'Native USB scan detected a Samsung download-mode device, but richer '
+      'USB identity strings still need operator attention.'
+    ),
+    devices=(
+      USBDeviceDescriptor(
+        vendor_id=0x04E8,
+        product_id=0x685D,
+        bus=1,
+        address=5,
+        serial_number='usb-g991u-lab-02',
+        manufacturer='Samsung',
+        product_name='Samsung Galaxy S21 (SM-G991U)',
+        product_code='SM-G991U',
+        command_ready=False,
+      ),
+    ),
+    notes=('Native USB backend resolved from bundled libusb.',),
+  )
+
+
+def _failed_usb_probe_result():
+  return USBProbeResult(
+    state='failed',
+    summary='Native USB detection failed before a trustworthy Samsung download-mode identity could be built.',
+    notes=(
+      'Bundled libusb backend could not be resolved on Windows.',
+    ),
+    remediation_command='powershell.exe -NoProfile -ExecutionPolicy Bypass',
   )
 
 
@@ -274,7 +320,7 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertIn('inspection_boundary=', output)
     self.assertIn('inspection_pit state="captured"', output)
 
-  def test_inspect_device_can_fall_through_to_heimdall_download_mode_detection(self) -> None:
+  def test_inspect_device_can_fall_through_to_native_usb_download_mode_detection(self) -> None:
     stream = io.StringIO()
 
     with patch(
@@ -284,11 +330,11 @@ class CliControlSurfaceTests(unittest.TestCase):
         _no_device_fastboot_detection_trace(),
       ),
     ) as mocked_android, patch(
+      'calamum_vulcan.app.__main__.VulcanUSBScanner.probe_download_mode_devices',
+      return_value=_ready_usb_probe_result(),
+    ) as mocked_usb, patch(
       'calamum_vulcan.app.__main__.execute_heimdall_command',
-      side_effect=(
-        _ready_heimdall_detection_trace(),
-        _ready_print_pit_trace(),
-      ),
+      return_value=_ready_print_pit_trace(),
     ) as mocked_heimdall:
       with redirect_stdout(stream):
         exit_code = main(['--inspect-device'])
@@ -296,11 +342,66 @@ class CliControlSurfaceTests(unittest.TestCase):
     output = stream.getvalue()
     self.assertEqual(exit_code, 0)
     self.assertEqual(mocked_android.call_count, 2)
-    self.assertEqual(mocked_heimdall.call_count, 2)
-    self.assertIn('inspection_live state="detected" source="heimdall"', output)
-    self.assertIn('inspection_live state="detected" source="heimdall" info_state="unavailable"', output)
+    mocked_usb.assert_called_once()
+    mocked_heimdall.assert_called_once()
+    self.assertIn('inspection_live state="detected" source="usb"', output)
+    self.assertIn('inspection_live state="detected" source="usb" info_state="unavailable"', output)
     self.assertIn('inspection_pit state="captured"', output)
     self.assertIn('SM-G991U', output)
+
+  def test_inspect_device_preserves_native_usb_attention_state(self) -> None:
+    stream = io.StringIO()
+
+    with patch(
+      'calamum_vulcan.app.__main__.execute_android_tools_command',
+      side_effect=(
+        _no_device_adb_detection_trace(),
+        _no_device_fastboot_detection_trace(),
+      ),
+    ) as mocked_android, patch(
+      'calamum_vulcan.app.__main__.VulcanUSBScanner.probe_download_mode_devices',
+      return_value=_attention_usb_probe_result(),
+    ) as mocked_usb, patch(
+      'calamum_vulcan.app.__main__.execute_heimdall_command',
+      return_value=_ready_print_pit_trace(),
+    ) as mocked_heimdall:
+      with redirect_stdout(stream):
+        exit_code = main(['--inspect-device'])
+
+    output = stream.getvalue()
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(mocked_android.call_count, 2)
+    mocked_usb.assert_called_once()
+    mocked_heimdall.assert_called_once()
+    self.assertIn('inspection_live state="attention" source="usb"', output)
+    self.assertIn('inspection_pit state="captured"', output)
+
+  def test_inspect_device_surfaces_native_usb_failure_honestly(self) -> None:
+    stream = io.StringIO()
+
+    with patch(
+      'calamum_vulcan.app.__main__.execute_android_tools_command',
+      side_effect=(
+        _no_device_adb_detection_trace(),
+        _no_device_fastboot_detection_trace(),
+      ),
+    ) as mocked_android, patch(
+      'calamum_vulcan.app.__main__.VulcanUSBScanner.probe_download_mode_devices',
+      return_value=_failed_usb_probe_result(),
+    ) as mocked_usb, patch(
+      'calamum_vulcan.app.__main__.execute_heimdall_command',
+      return_value=_ready_print_pit_trace(),
+    ) as mocked_heimdall:
+      with redirect_stdout(stream):
+        exit_code = main(['--inspect-device'])
+
+    output = stream.getvalue()
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(mocked_android.call_count, 2)
+    mocked_usb.assert_called_once()
+    mocked_heimdall.assert_called_once()
+    self.assertIn('inspection_live state="failed" source="usb"', output)
+    self.assertIn('inspection_pit state="captured"', output)
 
   def test_inspect_device_can_export_json_evidence_with_inspection_block(self) -> None:
     stream = io.StringIO()
@@ -393,6 +494,12 @@ class CliControlSurfaceTests(unittest.TestCase):
 
     self.assertIn('requires --transport-source heimdall-adapter', str(exit_signal.exception))
 
+  def test_reserved_integrated_runtime_transport_source_is_rejected_honestly(self) -> None:
+    with self.assertRaises(SystemExit) as exit_signal:
+      main(['--transport-source', 'integrated-runtime', '--describe-only'])
+
+    self.assertIn('reserved for the Calamum-owned runtime', str(exit_signal.exception))
+
   def test_execute_flash_plan_can_render_json_result(self) -> None:
     stream = io.StringIO()
 
@@ -456,7 +563,7 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertEqual(payload['suite_name'], 'safe-path-close')
     self.assertEqual(payload['release_version'], '0.4.0')
     self.assertEqual(scenario_map['read-pit-required-review']['gate_label'], 'Gate Blocked')
-    self.assertEqual(scenario_map['safe-path-ready-review']['live_source'], 'heimdall')
+    self.assertEqual(scenario_map['safe-path-ready-review']['live_source'], 'usb')
     self.assertEqual(
       dict(scenario_map['safe-path-ready-review']['action_states'])['Execute flash plan'],
       'next',

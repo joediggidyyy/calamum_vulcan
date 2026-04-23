@@ -63,7 +63,7 @@ class ShellViewModelTests(unittest.TestCase):
     )
     self.assertEqual(
       available_transport_sources(),
-      ('state-fixture', 'heimdall-adapter'),
+      ('state-fixture', 'integrated-runtime', 'heimdall-adapter'),
     )
 
   def test_panel_map_is_stable_for_blocked_review(self) -> None:

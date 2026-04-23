@@ -19,7 +19,6 @@ from calamum_vulcan.adapters.adb_fastboot import build_adb_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_adb_device_info_command_plan
 from calamum_vulcan.adapters.adb_fastboot import build_fastboot_detect_command_plan
 from calamum_vulcan.adapters.adb_fastboot import normalize_android_tools_result
-from calamum_vulcan.adapters.heimdall import build_detect_device_command_plan
 from calamum_vulcan.adapters.heimdall import build_print_pit_command_plan
 from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
 from calamum_vulcan.domain.reporting import REPORT_EXPORT_TARGETS
@@ -27,15 +26,16 @@ from calamum_vulcan.domain.reporting import REPORT_SCHEMA_VERSION
 from calamum_vulcan.domain.reporting import SessionEvidenceReport
 from calamum_vulcan.domain.reporting import build_session_evidence_report
 from calamum_vulcan.domain.live_device import LiveFallbackPosture
-from calamum_vulcan.domain.live_device import build_heimdall_live_detection_session
 from calamum_vulcan.domain.live_device import apply_live_device_info_trace
 from calamum_vulcan.domain.live_device import build_live_detection_session
+from calamum_vulcan.domain.live_device import build_usb_live_detection_session
 from calamum_vulcan.domain.pit import build_pit_inspection
 from calamum_vulcan.domain.safe_path import SAFE_PATH_CLOSE_SUITE_NAME
 from calamum_vulcan.domain.state import PlatformSession
 from calamum_vulcan.domain.state import build_inspection_workflow
 from calamum_vulcan.fixtures import load_heimdall_pit_fixture
-from calamum_vulcan.fixtures import load_heimdall_process_fixture
+from calamum_vulcan.usb import USBDeviceDescriptor
+from calamum_vulcan.usb import USBProbeResult
 
 from .demo import build_demo_adapter_session
 from .demo import build_demo_package_assessment
@@ -81,7 +81,7 @@ SAFE_PATH_CLOSE_CARRY_FORWARD_DEBT = (
   'Keep default native transport promotion deferred to `0.5.0`; Heimdall remains the delegated lower transport for the current Samsung subset.',
   'Promote GUI package-load and bounded execute controls only after the new deck contract survives wider operator trials.',
   'Expand real-hardware Heimdall detect fixtures so normalization coverage keeps pace with reviewed Samsung download-mode output variants.',
-  'Restore trusted-publication and release-rehearsal automation only after the safe-path-close suite stays stable end to end.',
+  'Keep publication rehearsal and any future registry automation out of the historical safe-path-close contract; revisit them only in the active sprint closeout surfaces.',
 )
 
 
@@ -872,7 +872,7 @@ def _build_safe_path_close_scenarios(
 ) -> Tuple[SprintCloseScenarioResult, ...]:
   """Return the deterministic FS4-07 safe-path closeout scenario matrix."""
 
-  download_live_detection = _ready_heimdall_live_detection()
+  download_live_detection = _ready_usb_live_detection()
 
   read_pit_required_session = replace(
     build_demo_session('no-device'),
@@ -1149,7 +1149,7 @@ def _build_safe_path_close_proof_points(
     safe_path_ready.phase_label == 'Ready to Execute'
     and safe_path_ready.gate_label == 'Gate Ready'
     and safe_path_ready.transport_state == 'not_invoked'
-    and safe_path_ready.live_source == 'heimdall'
+    and safe_path_ready.live_source == 'usb'
     and safe_path_ready.pit_package_alignment == 'matched'
   )
   runtime_evidence_handoff = (
@@ -1178,9 +1178,9 @@ def _build_safe_path_close_proof_points(
       summary='Read-PIT-required and PIT-mismatch scenarios stay blocked while the ready review stays Gate Ready only after matched PIT truth is present.',
     ),
     SprintCloseProofPoint(
-      label='The ready review remains one bounded safe-path candidate with delegated lower transport',
+      label='The ready review now uses native USB for supported-path download-mode identity',
       passed=delegated_safe_path_holds,
-      summary='The ready scenario reaches Ready to Execute with Heimdall still explicit as a delegated lower transport rather than a widened native claim.',
+      summary='The ready scenario reaches Ready to Execute with native USB explicit for supported-path download-mode identity while PIT and runtime transport remain separately bounded.',
     ),
     SprintCloseProofPoint(
       label='Resolved runtime hands off to exportable evidence and preserved transcript artifacts',
@@ -1233,16 +1233,28 @@ def _ready_adb_live_detection():
   )
 
 
-def _ready_heimdall_live_detection():
-  """Return one deterministic Heimdall download-mode detection snapshot."""
+def _ready_usb_live_detection():
+  """Return one deterministic native USB download-mode detection snapshot."""
 
-  return build_heimdall_live_detection_session(
-    normalize_heimdall_result(
-      build_detect_device_command_plan(),
-      load_heimdall_process_fixture('detect-ready'),
+  return build_usb_live_detection_session(
+    USBProbeResult(
+      state='detected',
+      summary='Native USB scan detected a Samsung download-mode device.',
+      devices=(
+        USBDeviceDescriptor(
+          vendor_id=0x04E8,
+          product_id=0x685D,
+          bus=1,
+          address=5,
+          serial_number='usb-g991u-lab-01',
+          manufacturer='Samsung',
+          product_name='Samsung Galaxy S21 (SM-G991U)',
+          product_code='SM-G991U',
+        ),
+      ),
+      notes=('Native USB backend resolved from bundled libusb.',),
     ),
-    source_labels=('adb', 'fastboot', 'heimdall'),
-    treat_missing_device_as_cleared=True,
+    source_labels=('adb', 'fastboot', 'usb'),
   )
 
 

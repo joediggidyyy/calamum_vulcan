@@ -173,7 +173,7 @@ class IntegrationSuiteTests(unittest.TestCase):
     self.assertTrue(all(point.passed for point in bundle.proof_points))
     self.assertEqual(scenario_map['read-pit-required-review'].gate_label, 'Gate Blocked')
     self.assertEqual(scenario_map['safe-path-ready-review'].gate_label, 'Gate Ready')
-    self.assertEqual(scenario_map['safe-path-ready-review'].live_source, 'heimdall')
+    self.assertEqual(scenario_map['safe-path-ready-review'].live_source, 'usb')
     self.assertEqual(
       dict(scenario_map['safe-path-ready-review'].action_states)['Execute flash plan'],
       'next',

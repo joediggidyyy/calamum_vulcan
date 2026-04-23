@@ -32,7 +32,6 @@ from ..adapters.adb_fastboot import build_fastboot_detect_command_plan
 from ..adapters.adb_fastboot import build_fastboot_reboot_command_plan
 from ..adapters.adb_fastboot import execute_android_tools_command
 from ..adapters.heimdall import build_download_pit_command_plan
-from ..adapters.heimdall import build_detect_device_command_plan
 from ..adapters.heimdall import build_print_pit_command_plan
 from ..adapters.heimdall import execute_heimdall_command
 from ..adapters.heimdall import run_bounded_heimdall_flash_session
@@ -56,8 +55,8 @@ from .integration import write_sprint_close_bundle
 from ..domain.live_device import LiveFallbackPosture
 from ..domain.live_device import LiveDeviceSource
 from ..domain.live_device import apply_live_device_info_trace
-from ..domain.live_device import build_heimdall_live_detection_session
 from ..domain.live_device import build_live_detection_session
+from ..domain.live_device import build_usb_live_detection_session
 from ..domain.flash_plan import build_reviewed_flash_plan
 from ..domain.package import PackageArchiveImportError
 from ..domain.package import assess_package_archive
@@ -75,6 +74,7 @@ from .qt_compat import QT_AVAILABLE
 from .qt_compat import QtWidgets
 from .qt_compat import runtime_requirement_message
 from .qt_shell import launch_shell
+from ..usb import VulcanUSBScanner
 from .view_models import build_shell_view_model
 from .view_models import describe_shell
 
@@ -343,7 +343,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
   parser.add_argument(
     '--execute-flash-plan',
     action='store_true',
-    help='Run the platform-supervised bounded safe-path flash lane. Currently this requires --transport-source heimdall-adapter so the delegated lower transport remains explicit.',
+    help='Run the platform-supervised bounded safe-path flash lane. The Sprint 6 supported-path token is --transport-source integrated-runtime, but the current executable lane still requires --transport-source heimdall-adapter until the integrated runtime lands.',
   )
   parser.add_argument(
     '--device-serial',
@@ -381,7 +381,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     '--transport-source',
     choices=available_transport_sources(),
     default='state-fixture',
-    help='Choose direct state fixtures or the FS-07 Heimdall adapter seam.',
+    help='Choose fixture review (state-fixture), the reserved Sprint 6 supported-path token (integrated-runtime), or the historical Heimdall adapter seam (heimdall-adapter).',
   )
   parser.add_argument(
     '--adapter-fixture',
@@ -448,6 +448,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     live_detection = _enrich_live_detection_for_control_trace(trace)
     print(_render_control_trace(trace, args.control_format, live_detection=live_detection))
     return 0
+
+  _validate_transport_source_selection(args)
 
   if args.inspect_device:
     _validate_inspection_inputs(args)
@@ -651,6 +653,16 @@ def _validate_package_inputs(args: argparse.Namespace) -> None:
     raise SystemExit(
       'Real package archive intake is currently supported only with --transport-source state-fixture.'
     )
+
+
+def _validate_transport_source_selection(args: argparse.Namespace) -> None:
+  """Reject reserved transport tokens that are not executable yet."""
+
+  if args.transport_source != 'integrated-runtime':
+    return
+  raise SystemExit(
+    'The Sprint 6 supported-path token --transport-source integrated-runtime is reserved for the Calamum-owned runtime and is not implemented yet. Use --transport-source state-fixture for deterministic review fixtures or --transport-source heimdall-adapter for the historical delegated lane.'
+  )
 
 
 def _validate_inspection_inputs(args: argparse.Namespace) -> None:
@@ -1091,6 +1103,18 @@ def _enrich_live_detection_for_control_trace(
   return apply_live_device_info_trace(live_detection, info_trace)
 
 
+def _run_supported_download_mode_detection(
+  source_labels: Sequence[str],
+):
+  """Return the shared Sprint 6 native USB download-mode detection result."""
+
+  probe_result = VulcanUSBScanner().probe_download_mode_devices()
+  return build_usb_live_detection_session(
+    probe_result,
+    source_labels=tuple(source_labels),
+  )
+
+
 def _run_inspect_only_workflow(
   args: argparse.Namespace,
   scenario_name: str,
@@ -1196,7 +1220,7 @@ def _run_execute_flash_plan_workflow(
 def _run_inspect_only_live_detection(
   device_serial: Optional[str],
 ):
-  """Run the unified inspect-only detection path across ADB, fastboot, and Heimdall."""
+  """Run the unified inspect-only detection path across ADB, fastboot, and native USB."""
 
   adb_trace = execute_android_tools_command(
     build_adb_detect_command_plan(device_serial=device_serial)
@@ -1223,13 +1247,8 @@ def _run_inspect_only_live_detection(
       ),
       source_labels=('adb', 'fastboot'),
     )
-  heimdall_trace = execute_heimdall_command(
-    build_detect_device_command_plan()
-  )
-  return build_heimdall_live_detection_session(
-    heimdall_trace,
-    source_labels=('adb', 'fastboot', 'heimdall'),
-    treat_missing_device_as_cleared=True,
+  return _run_supported_download_mode_detection(
+    source_labels=('adb', 'fastboot', 'usb'),
   )
 
 

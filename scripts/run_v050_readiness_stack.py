@@ -16,6 +16,8 @@ from typing import Optional
 from typing import Sequence
 from typing import Tuple
 
+from scripts.readiness_reporting import write_readiness_aggregate_report
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ARCHIVE_ROOT = REPO_ROOT / 'temp' / 'fs5_readiness'
@@ -219,6 +221,7 @@ def _write_summary(results: Sequence[ValidationLaneResult], include_testpypi: bo
   summary = {
     'repo_root': str(REPO_ROOT),
     'archive_root': str(ARCHIVE_ROOT),
+    'aggregate_report_path': str(ARCHIVE_ROOT / 'readiness_aggregate_report.md'),
     'include_testpypi_rehearsal': include_testpypi,
     'overall_status': overall_status,
     'lanes': [asdict(result) for result in results],
@@ -230,6 +233,12 @@ def _write_summary(results: Sequence[ValidationLaneResult], include_testpypi: bo
   (ARCHIVE_ROOT / 'readiness_summary.md').write_text(
     _render_markdown_summary(summary) + '\n',
     encoding='utf-8',
+  )
+  write_readiness_aggregate_report(
+    summary,
+    archive_root=ARCHIVE_ROOT,
+    repo_root=REPO_ROOT,
+    sprint_label='0.5.0',
   )
   return summary
 
@@ -259,6 +268,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
   _print(
     [
       'archive_root="{root}"'.format(root=ARCHIVE_ROOT),
+      'aggregate_report="{path}"'.format(
+        path=summary['aggregate_report_path'],
+      ),
       'selected_lane_count="{count}"'.format(count=len(results)),
       'overall_status="{status}"'.format(status=summary['overall_status']),
       'readiness_contract="{status}"'.format(status=summary['overall_status']),

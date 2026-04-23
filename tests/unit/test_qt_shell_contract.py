@@ -56,6 +56,9 @@ if QT_AVAILABLE:
   from calamum_vulcan.fixtures import load_heimdall_pit_fixture
   from calamum_vulcan.fixtures import load_package_manifest_fixture
   from calamum_vulcan.domain.live_device import build_heimdall_live_detection_session
+  from calamum_vulcan.domain.live_device import build_usb_live_detection_session
+  from calamum_vulcan.usb import USBDeviceDescriptor
+  from calamum_vulcan.usb import USBProbeResult
 
 
 def _ready_adb_detection_trace():
@@ -144,6 +147,34 @@ def _no_device_heimdall_detection_trace():
   return normalize_heimdall_result(
     build_detect_device_command_plan(),
     load_heimdall_process_fixture('detect-none'),
+  )
+
+
+def _ready_usb_probe_result():
+  return USBProbeResult(
+    state='detected',
+    summary='Native USB scan detected a Samsung download-mode device.',
+    devices=(
+      USBDeviceDescriptor(
+        vendor_id=0x04E8,
+        product_id=0x685D,
+        bus=1,
+        address=7,
+        serial_number='usb-g991u-lab-01',
+        manufacturer='Samsung',
+        product_name='Samsung Galaxy S21 (SM-G991U)',
+        product_code='SM-G991U',
+      ),
+    ),
+    notes=('Native USB backend resolved from bundled libusb.',),
+  )
+
+
+def _no_device_usb_probe_result():
+  return USBProbeResult(
+    state='cleared',
+    summary='Native USB scan did not detect a Samsung download-mode device.',
+    notes=('Native USB backend resolved from bundled libusb.',),
   )
 
 
@@ -971,6 +1002,26 @@ class QtShellContractTests(unittest.TestCase):
     self.assertEqual(events[0]['last_heartbeat_note'], 'window_shown')
     self.assertGreaterEqual(events[0]['stall_seconds'], 0.10)
 
+  def test_refresh_shell_view_model_does_not_use_take_central_widget_rebuild_path(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+    window = ShellWindow(model)
+
+    with mock.patch.object(
+      window,
+      'takeCentralWidget',
+      side_effect=RuntimeError('legacy central-widget teardown should not run'),
+    ):
+      window._refresh_shell_view_model()
+
+    self.assertEqual(window.phase_label(), 'No Device')
+    self.assertIsNotNone(window.centralWidget())
+    window.close()
+
   def test_detail_row_height_expands_for_wrapped_value_text(self) -> None:
     row = DetailRow(
       (
@@ -1114,7 +1165,7 @@ class QtShellContractTests(unittest.TestCase):
       self.assertIn('Fastboot', window.live_status_text())
       window.close()
 
-  def test_detect_device_button_falls_through_to_heimdall_download_mode(self) -> None:
+  def test_detect_device_button_falls_through_to_native_usb_download_mode(self) -> None:
     session = build_demo_session('no-device')
     model = build_shell_view_model(
       session,
@@ -1138,9 +1189,9 @@ class QtShellContractTests(unittest.TestCase):
         ),
       ),
     ) as mocked_android, mock.patch(
-      'calamum_vulcan.app.qt_shell.execute_heimdall_command',
-      return_value=_ready_heimdall_detection_trace(),
-    ) as mocked_heimdall:
+      'calamum_vulcan.app.qt_shell.VulcanUSBScanner.probe_download_mode_devices',
+      return_value=_ready_usb_probe_result(),
+    ) as mocked_usb:
       window = ShellWindow(model)
 
       detect_button = window.findChild(
@@ -1155,7 +1206,7 @@ class QtShellContractTests(unittest.TestCase):
         self._process_events_until(lambda: mocked_android.call_count == 2)
       )
       self.assertTrue(
-        self._process_events_until(lambda: mocked_heimdall.call_count == 1)
+        self._process_events_until(lambda: mocked_usb.call_count == 1)
       )
       self.assertTrue(
         self._process_events_until(
@@ -1164,23 +1215,23 @@ class QtShellContractTests(unittest.TestCase):
       )
 
       self.assertEqual(window.phase_label(), 'Download-Mode Device Detected')
-      self.assertIn('HEIMDALL', window.panel_summary('Device Identity'))
+      self.assertIn('USB', window.panel_summary('Device Identity'))
       self.assertTrue(
         any(
-          'Live companion backend: HEIMDALL' in line
+          'Live companion backend: USB' in line
           for line in window.panel_detail_lines('Device Identity')
         )
       )
       self.assertTrue(
         any(
-          'Live mode: heimdall/download' in line
+          'Live mode: usb/download' in line
           for line in window.panel_detail_lines('Device Identity')
         )
       )
       device_pills = dict(window.status_pill_values())
       self.assertEqual(device_pills['Phase'], 'Download-Mode Device Detected')
-      self.assertIn('SM-G991U via HEIMDALL', device_pills['Device'])
-      self.assertIn('Heimdall', window.live_status_text())
+      self.assertIn('SM-G991U via USB', device_pills['Device'])
+      self.assertIn('native USB', window.live_status_text())
       window.close()
 
   def test_redetect_after_disconnect_clears_live_device_surfaces(self) -> None:
@@ -1211,9 +1262,9 @@ class QtShellContractTests(unittest.TestCase):
         no_device_fastboot_trace,
       ),
     ) as mocked_execute, mock.patch(
-      'calamum_vulcan.app.qt_shell.execute_heimdall_command',
-      return_value=_no_device_heimdall_detection_trace(),
-    ) as mocked_heimdall:
+      'calamum_vulcan.app.qt_shell.VulcanUSBScanner.probe_download_mode_devices',
+      return_value=_no_device_usb_probe_result(),
+    ) as mocked_usb:
       window = ShellWindow(model)
 
       detect_button = window.findChild(
@@ -1244,7 +1295,7 @@ class QtShellContractTests(unittest.TestCase):
         self._process_events_until(lambda: mocked_execute.call_count == 4)
       )
       self.assertTrue(
-        self._process_events_until(lambda: mocked_heimdall.call_count == 1)
+        self._process_events_until(lambda: mocked_usb.call_count == 1)
       )
       self.assertTrue(
         self._process_events_until(
@@ -1264,10 +1315,9 @@ class QtShellContractTests(unittest.TestCase):
       window.close()
 
   def test_disconnect_monitor_clears_live_surfaces_after_debounce(self) -> None:
-    live_detection = build_heimdall_live_detection_session(
-      _ready_heimdall_detection_trace(),
-      source_labels=('adb', 'fastboot', 'heimdall'),
-      treat_missing_device_as_cleared=True,
+    live_detection = build_usb_live_detection_session(
+      _ready_usb_probe_result(),
+      source_labels=('adb', 'fastboot', 'usb'),
     )
     model = build_shell_view_model(
       replace(build_demo_session('no-device'), live_detection=live_detection),
@@ -1292,7 +1342,7 @@ class QtShellContractTests(unittest.TestCase):
         window._handle_disconnect_monitor_result(
           snapshot.source.value,
           snapshot.serial,
-          _no_device_heimdall_detection_trace(),
+          _no_device_usb_probe_result(),
           None,
         )
 
@@ -1309,10 +1359,9 @@ class QtShellContractTests(unittest.TestCase):
       window.close()
 
   def test_disconnect_monitor_cancels_pending_clear_when_presence_recovers(self) -> None:
-    live_detection = build_heimdall_live_detection_session(
-      _ready_heimdall_detection_trace(),
-      source_labels=('adb', 'fastboot', 'heimdall'),
-      treat_missing_device_as_cleared=True,
+    live_detection = build_usb_live_detection_session(
+      _ready_usb_probe_result(),
+      source_labels=('adb', 'fastboot', 'usb'),
     )
     model = build_shell_view_model(
       replace(build_demo_session('no-device'), live_detection=live_detection),
@@ -1337,13 +1386,13 @@ class QtShellContractTests(unittest.TestCase):
         window._handle_disconnect_monitor_result(
           snapshot.source.value,
           snapshot.serial,
-          _no_device_heimdall_detection_trace(),
+          _no_device_usb_probe_result(),
           None,
         )
         window._handle_disconnect_monitor_result(
           snapshot.source.value,
           snapshot.serial,
-          _ready_heimdall_detection_trace(),
+          _ready_usb_probe_result(),
           None,
         )
 
@@ -1355,7 +1404,7 @@ class QtShellContractTests(unittest.TestCase):
       )
 
       device_pills = dict(window.status_pill_values())
-      self.assertIn('HEIMDALL', device_pills['Device'])
+      self.assertIn('USB', device_pills['Device'])
       window.close()
 
   def test_load_package_button_reviews_real_archive_and_unlocks_execute_lane(self) -> None:
@@ -1366,8 +1415,8 @@ class QtShellContractTests(unittest.TestCase):
       session=ready_session,
       package_assessment=ready_package,
     )
-    live_detection = build_heimdall_live_detection_session(
-      _ready_heimdall_detection_trace(),
+    live_detection = build_usb_live_detection_session(
+      _ready_usb_probe_result(),
     )
     model = build_shell_view_model(
       replace(build_demo_session('no-device'), live_detection=live_detection),
@@ -1421,8 +1470,8 @@ class QtShellContractTests(unittest.TestCase):
       session=ready_session,
       package_assessment=ready_package,
     )
-    live_detection = build_heimdall_live_detection_session(
-      _ready_heimdall_detection_trace(),
+    live_detection = build_usb_live_detection_session(
+      _ready_usb_probe_result(),
     )
     model = build_shell_view_model(
       replace(build_demo_session('no-device'), live_detection=live_detection),
@@ -1502,8 +1551,8 @@ class QtShellContractTests(unittest.TestCase):
     )
     resume_manifest = load_package_manifest_fixture('ready-standard')
     resume_manifest['flash_plan']['reboot_policy'] = 'no_reboot'
-    live_detection = build_heimdall_live_detection_session(
-      _ready_heimdall_detection_trace(),
+    live_detection = build_usb_live_detection_session(
+      _ready_usb_probe_result(),
     )
     model = build_shell_view_model(
       replace(build_demo_session('no-device'), live_detection=live_detection),
@@ -1590,7 +1639,7 @@ class QtShellContractTests(unittest.TestCase):
       session,
       scenario_name=scenario_label('ready'),
       live_device=LiveCompanionDeviceViewModel(
-        backend='heimdall',
+        backend='usb',
         serial='samsung-galaxy-lab-04',
         state='download',
         transport='download-mode',

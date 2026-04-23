@@ -15,6 +15,7 @@ import calamum_vulcan.domain as domain
 from calamum_vulcan.app.integration import available_integration_suites
 from calamum_vulcan.app.integration import planned_integration_suites
 from calamum_vulcan.domain.safe_path import SAFE_PATH_CLOSE_SUITE_NAME
+from calamum_vulcan.domain.safe_path import SAFE_PATH_EVIDENCE_REQUIREMENTS
 from calamum_vulcan.domain.safe_path import SAFE_PATH_SCHEMA_VERSION
 from calamum_vulcan.domain.safe_path import SafePathContract
 from calamum_vulcan.domain.safe_path import SafePathOwnership
@@ -41,6 +42,8 @@ class FS401FoundationAnchorTests(unittest.TestCase):
     self.assertEqual(contract.ownership, SafePathOwnership.BLOCKED)
     self.assertEqual(contract.readiness, SafePathReadiness.UNREVIEWED)
     self.assertTrue(contract.fallback_visibility_required)
+    self.assertIn('closeout_boundary_alignment_review', SAFE_PATH_EVIDENCE_REQUIREMENTS)
+    self.assertNotIn('trusted_publication_rehearsal', SAFE_PATH_EVIDENCE_REQUIREMENTS)
 
   def test_session_authority_anchor_exposes_split_truth_surfaces(self) -> None:
     contract = SessionAuthorityContract()

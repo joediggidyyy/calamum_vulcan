@@ -1,0 +1,2 @@
+{"details": {"checklists_dir": "operations/checklists", "hash": "1448f3a3d9209eaccb2bc9b52e12007ac41797e7adab8c6a8960082df951ffdc", "snapshot_at": "2026-04-23T00:07:25.967989Z"}, "event": "ops_awareness_written", "session_id": "20260422200725-calamum_vulcan", "timestamp": "2026-04-23T00:07:25.976188+00:00"}
+{"details": {"context": "policy_index", "present": false, "session_id": "20260422200725-calamum_vulcan"}, "event": "auto_hydrator_run", "session_id": "20260422200725-calamum_vulcan", "timestamp": "2026-04-23T00:07:25.994584+00:00"}

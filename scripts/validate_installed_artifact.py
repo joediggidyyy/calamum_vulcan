@@ -74,6 +74,8 @@ installed_root = Path(calamum_vulcan.__file__).resolve().parent
 if repo_root in installed_root.parents or installed_root == repo_root:
   raise SystemExit('Installed package resolved inside the source tree.')
 
+source_branding_dir = repo_root / 'calamum_vulcan' / 'assets' / 'branding'
+
 dist = metadata.distribution('calamum_vulcan')
 file_names = sorted(str(file) for file in dist.files or ())
 required = [
@@ -118,10 +120,11 @@ if fixture_names != expected_fixtures:
 
 branding_dir = files('calamum_vulcan').joinpath('assets').joinpath('branding')
 branding_names = sorted(item.name for item in branding_dir.iterdir() if item.name.endswith('.png'))
-expected_branding = [
-  'calamum_logo_color.png',
-  'calamum_taskbar_icon.png',
-]
+expected_branding = sorted(
+  item.name
+  for item in source_branding_dir.iterdir()
+  if item.name.endswith('.png')
+)
 if branding_names != expected_branding:
   raise SystemExit('Installed branding asset set mismatch: ' + ', '.join(branding_names))
 
@@ -529,8 +532,8 @@ def main() -> int:
   fallback_boundary = safe_path_map.get('fastboot-fallback-boundary-review')
   if read_pit_required is None or read_pit_required['gate_label'] != 'Gate Blocked':
     raise SystemExit('Installed safe-path-close bundle did not preserve the read-PIT-required blocked review.')
-  if ready_review is None or ready_review['live_source'] != 'heimdall':
-    raise SystemExit('Installed safe-path-close bundle did not preserve the Heimdall-backed ready review.')
+  if ready_review is None or ready_review['live_source'] != 'usb':
+    raise SystemExit('Installed safe-path-close bundle did not preserve the native-USB-backed ready review.')
   if dict(ready_review['action_states']).get('Execute flash plan') != 'next':
     raise SystemExit('Installed safe-path-close bundle did not preserve the truthful execute-next deck state.')
   if runtime_complete is None or dict(runtime_complete['action_states']).get('Export evidence') != 'next':
