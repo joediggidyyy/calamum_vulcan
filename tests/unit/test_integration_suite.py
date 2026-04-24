@@ -16,6 +16,7 @@ if str(FINAL_EXAM_ROOT) not in sys.path:
 from calamum_vulcan.app.integration import build_sprint_close_bundle
 from calamum_vulcan.app.integration import build_orchestration_close_bundle
 from calamum_vulcan.app.integration import build_read_side_close_bundle
+from calamum_vulcan.app.integration import build_autonomy_close_bundle
 from calamum_vulcan.app.integration import build_safe_path_close_bundle
 from calamum_vulcan.app.integration import render_sprint_close_bundle_markdown
 from calamum_vulcan.app.integration import serialize_sprint_close_bundle_json
@@ -179,6 +180,14 @@ class IntegrationSuiteTests(unittest.TestCase):
       'next',
     )
     self.assertEqual(
+      scenario_map['safe-path-runtime-complete'].transport_source,
+      'integrated-runtime',
+    )
+    self.assertEqual(
+      scenario_map['safe-path-runtime-complete'].pit_source,
+      'integrated_runtime_print_pit',
+    )
+    self.assertEqual(
       dict(scenario_map['safe-path-runtime-complete'].action_states)['Export evidence'],
       'next',
     )
@@ -196,6 +205,83 @@ class IntegrationSuiteTests(unittest.TestCase):
     self.assertIn('Read PIT required review', markdown)
     self.assertIn('Execute flash plan=next', markdown)
     self.assertIn('Carry-forward debt into 0.5.0', markdown)
+
+  def test_autonomy_close_bundle_proves_integrated_runtime_candidate_and_quarantine(self) -> None:
+    bundle = build_autonomy_close_bundle(
+      captured_at_utc='2026-04-23T23:10:00Z'
+    )
+    scenario_map = {scenario.scenario_id: scenario for scenario in bundle.scenarios}
+
+    self.assertEqual(bundle.release_version, '0.6.0')
+    self.assertEqual(bundle.suite_name, 'autonomy-close')
+    self.assertEqual(
+      tuple(scenario_map.keys()),
+      (
+        'read-pit-required-review',
+        'supported-path-ready-review',
+        'integrated-runtime-complete',
+        'integrated-runtime-failure-review',
+        'integrated-runtime-resume-review',
+        'pit-mismatch-block-review',
+        'fastboot-fallback-boundary-review',
+      ),
+    )
+    self.assertTrue(all(point.passed for point in bundle.proof_points))
+    self.assertEqual(
+      scenario_map['supported-path-ready-review'].transport_source,
+      'integrated-runtime',
+    )
+    self.assertEqual(scenario_map['supported-path-ready-review'].live_source, 'usb')
+    self.assertEqual(
+      scenario_map['supported-path-ready-review'].pit_source,
+      'integrated_runtime_print_pit',
+    )
+    self.assertEqual(
+      dict(scenario_map['supported-path-ready-review'].action_states)['Execute flash plan'],
+      'next',
+    )
+    self.assertEqual(
+      scenario_map['integrated-runtime-complete'].transport_state,
+      'completed',
+    )
+    self.assertTrue(scenario_map['integrated-runtime-complete'].transcript_preserved)
+    self.assertEqual(
+      scenario_map['integrated-runtime-failure-review'].transport_state,
+      'failed',
+    )
+    self.assertTrue(
+      scenario_map['integrated-runtime-failure-review'].transcript_preserved
+    )
+    self.assertEqual(
+      scenario_map['integrated-runtime-resume-review'].transport_state,
+      'completed',
+    )
+    self.assertTrue(
+      scenario_map['integrated-runtime-resume-review'].transcript_preserved
+    )
+    self.assertEqual(
+      scenario_map['pit-mismatch-block-review'].gate_label,
+      'Gate Blocked',
+    )
+    self.assertEqual(
+      scenario_map['fastboot-fallback-boundary-review'].live_source,
+      'fastboot',
+    )
+
+  def test_autonomy_close_markdown_mentions_integrated_runtime_and_1_0_0_debt(self) -> None:
+    bundle = build_autonomy_close_bundle(
+      captured_at_utc='2026-04-23T23:15:00Z'
+    )
+    markdown = render_sprint_close_bundle_markdown(bundle)
+
+    self.assertIn('Calamum Vulcan FS6-05 autonomy-close bundle', markdown)
+    self.assertIn(
+      'Sprint 0.6.0 closes with 5/5 autonomy-close proof points satisfied',
+      markdown,
+    )
+    self.assertIn('Integrated-runtime completion review', markdown)
+    self.assertIn('integrated-runtime', markdown)
+    self.assertIn('Carry-forward debt into 1.0.0', markdown)
 
 
 if __name__ == '__main__':

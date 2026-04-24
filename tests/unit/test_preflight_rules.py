@@ -257,6 +257,36 @@ class PreflightRuleTests(unittest.TestCase):
       )
     )
 
+  def test_download_mode_review_defers_identity_and_package_until_pit_truth_is_ready(self) -> None:
+    report = evaluate_preflight(
+      PreflightInput(
+        device_present=True,
+        in_download_mode=True,
+        device_registry_known=False,
+        package_selected=False,
+        pit_required=True,
+        device_identity_review_deferred=True,
+        package_review_deferred=True,
+      )
+    )
+
+    signal_map = {signal.rule_id: signal for signal in report.signals}
+
+    self.assertEqual(report.gate, PreflightGate.BLOCKED)
+    self.assertEqual(report.block_count, 1)
+    self.assertEqual(
+      signal_map['device_registry'].severity,
+      PreflightSeverity.PASS,
+    )
+    self.assertEqual(
+      signal_map['package_selected'].severity,
+      PreflightSeverity.PASS,
+    )
+    self.assertEqual(
+      signal_map['pit_required'].severity,
+      PreflightSeverity.BLOCK,
+    )
+
 
 if __name__ == '__main__':
   unittest.main()

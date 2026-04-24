@@ -20,6 +20,9 @@ from calamum_vulcan.domain.pit import PitInspection
 from calamum_vulcan.domain.pit import build_pit_inspection
 from calamum_vulcan.domain.state import PlatformSession
 from calamum_vulcan.domain.state import replay_events
+from calamum_vulcan.domain.state.integrated_runtime import build_integrated_reviewed_flash_plan
+from calamum_vulcan.domain.state.integrated_runtime import project_heimdall_trace_to_integrated_runtime
+from calamum_vulcan.domain.state.integrated_runtime import run_integrated_flash_session
 from calamum_vulcan.fixtures import load_heimdall_pit_fixture
 from calamum_vulcan.fixtures import available_heimdall_process_fixtures
 from calamum_vulcan.fixtures import blocked_then_cleared_events
@@ -189,6 +192,7 @@ def build_demo_pit_inspection(
   session: Optional[PlatformSession] = None,
   package_assessment: Optional[PackageManifestAssessment] = None,
   pit_fixture_name: str = 'scenario-default',
+  transport_backend: str = 'heimdall',
 ) -> Optional[PitInspection]:
   """Return repo-owned PIT inspection truth for one supported demo scenario."""
 
@@ -208,6 +212,8 @@ def build_demo_pit_inspection(
     output_path='artifacts/device.pit',
   )
   trace = normalize_heimdall_result(command_plan, process_result)
+  if transport_backend == 'integrated-runtime':
+    trace = project_heimdall_trace_to_integrated_runtime(trace)
   return build_pit_inspection(
     trace,
     detected_product_code=session.product_code,
@@ -249,6 +255,7 @@ def build_demo_adapter_session(
     name,
     package_fixture_name=package_fixture_name,
     adapter_fixture_name=adapter_fixture_name,
+    transport_backend='heimdall',
   )
 
   def _runner(command_plan: object) -> object:
@@ -266,10 +273,46 @@ def build_demo_adapter_session(
   return runtime_result.session, package_assessment, runtime_result.trace
 
 
+def build_demo_integrated_runtime_session(
+  name: str,
+  package_fixture_name: str = 'scenario-default',
+  adapter_fixture_name: str = 'scenario-default',
+) -> Tuple[PlatformSession, PackageManifestAssessment, HeimdallNormalizedTrace]:
+  """Build one demo session from the supported-path integrated runtime lane."""
+
+  (
+    base_session,
+    package_assessment,
+    pit_inspection,
+    fixture_name,
+    process_result,
+  ) = build_demo_safe_path_runtime_context(
+    name,
+    package_fixture_name=package_fixture_name,
+    adapter_fixture_name=adapter_fixture_name,
+    transport_backend='integrated-runtime',
+  )
+
+  def _runner(command_plan: object) -> object:
+    del command_plan
+    return process_result
+
+  runtime_result = run_integrated_flash_session(
+    base_session,
+    build_integrated_reviewed_flash_plan(package_assessment),
+    package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
+    runner=_runner,
+    fixture_name=fixture_name,
+  )
+  return runtime_result.session, package_assessment, runtime_result.trace
+
+
 def build_demo_safe_path_runtime_context(
   name: str,
   package_fixture_name: str = 'scenario-default',
   adapter_fixture_name: str = 'scenario-default',
+  transport_backend: str = 'heimdall',
 ) -> Tuple[
   PlatformSession,
   PackageManifestAssessment,
@@ -289,6 +332,7 @@ def build_demo_safe_path_runtime_context(
     name,
     session=base_session,
     package_assessment=package_assessment,
+    transport_backend=transport_backend,
   )
   fixture_name = _resolved_adapter_fixture_name(name, adapter_fixture_name)
   return (

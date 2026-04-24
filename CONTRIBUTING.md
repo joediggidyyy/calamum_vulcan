@@ -1,6 +1,6 @@
 # Contributing to Calamum Vulcan
 
-**Document ID**: `CALAMUM_VULCAN_CONTRIBUTING_050`  
+**Document ID**: `CALAMUM_VULCAN_CONTRIBUTING_060`  
 **Status**: Public contributing guidelines  
 **Owner**: ORACL-Prime  
 **Project**: Calamum Vulcan  
@@ -55,21 +55,21 @@ The installed-artifact runner is the repeatable clean-environment smoke and pack
 
 The scripted simulation runner is the repeatable release-root and installed-artifact scenario matrix, offscreen GUI, and deterministic evidence-export check for `FS-P04`.
 
-## Sprint `0.5.0` package-only closeout
+## Sprint `0.6.0` package-only closeout
 
-For the current Sprint 5 closeout lane:
+For the current Sprint 6 closeout lane:
 
-- treat `0.5.0` as a **local package-only boundary**, not a public PyPI/GitHub publication boundary
-- if a later repo-visible `v0.5.0` tag is created, frame it as a pre-`1.0.0` sprint package boundary rather than a polished public promotion boundary
+- treat `0.6.0` as a **local package-only autonomy boundary**, not a public PyPI/GitHub publication boundary
+- if a later repo-visible `v0.6.0` tag is created, frame it as a pre-`1.0.0` sprint package boundary rather than a polished public promotion boundary
 - keep `0.3.0` as the current public stable release until the immediate post-`0.6.0` `1.0.0` promotion gate
-- run the Sprint 5 readiness and closeout proof before claiming the boundary is package-ready:
-	- `python scripts/run_v050_readiness_stack.py`
-	- `python scripts/run_v050_timeline_audit.py`
+- run the Sprint 6 readiness and closeout proof before claiming the boundary is package-ready:
+	- `python scripts/run_v060_readiness_stack.py`
+	- `python scripts/run_v060_alignment_audit.py`
 	- `python scripts/build_release_artifacts.py`
 	- `python scripts/validate_installed_artifact.py`
 	- `python scripts/run_scripted_simulation_suite.py`
 	- `python scripts/run_empirical_review_stack.py`
-- preserve publication workflow knowledge as dormant carry-forward input, not as Sprint 5 success criteria
+- preserve publication workflow knowledge as dormant carry-forward input, not as Sprint 6 success criteria
 
 ## Dormant publication workflow
 
@@ -114,11 +114,11 @@ Use the private reporting guidance in `SECURITY.md`.
 
 ## Scope discipline
 
-For current local `0.5.x` closeout work:
+For current local `0.6.x` closeout work:
 
 - keep the GUI-first shell contract intact
 - keep `.venv-core` as the default validated runtime
 - treat Qt font warnings as packaging debt, not functional test failures
 - do not imply native read-side ownership beyond the reviewed Samsung subset that was actually validated
-- do not imply a fully Calamum-owned integrated Samsung runtime before the later `0.6.0` autonomy boundary is actually closed
-- do not imply public `0.5.0` publication; this sprint closes as a package-only boundary
+- do not flatten fallback, oracle, or historical Heimdall lanes into the supported-path promise now that `integrated-runtime` is the active Sprint 6 lane
+- do not imply public `0.6.0` publication; this sprint closes as a package-only boundary

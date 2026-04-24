@@ -12,14 +12,18 @@ if str(FINAL_EXAM_ROOT) not in sys.path:
   sys.path.insert(0, str(FINAL_EXAM_ROOT))
 
 from calamum_vulcan.adapters.heimdall import build_download_pit_command_plan
+from calamum_vulcan.adapters.heimdall import HeimdallOperation
+from calamum_vulcan.adapters.heimdall import HeimdallProcessResult
 from calamum_vulcan.adapters.heimdall import build_print_pit_command_plan
 from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
 from calamum_vulcan.app.demo import build_demo_package_assessment
 from calamum_vulcan.app.demo import build_demo_session
 from calamum_vulcan.domain.pit import PitInspectionState
 from calamum_vulcan.domain.pit import PitPackageAlignment
+from calamum_vulcan.domain.pit import PitSource
 from calamum_vulcan.domain.pit import build_pit_inspection
 from calamum_vulcan.domain.pit import preflight_overrides_from_pit_inspection
+from calamum_vulcan.domain.state.integrated_runtime import project_heimdall_trace_to_integrated_runtime
 from calamum_vulcan.fixtures import load_heimdall_pit_fixture
 
 
@@ -65,6 +69,26 @@ class PitContractTests(unittest.TestCase):
     self.assertEqual(inspection.package_alignment, PitPackageAlignment.MISMATCHED)
     self.assertIn('does not match the reviewed package fingerprint', inspection.summary)
 
+  def test_integrated_runtime_print_trace_uses_supported_path_source_semantics(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    trace = project_heimdall_trace_to_integrated_runtime(
+      normalize_heimdall_result(
+        build_print_pit_command_plan(),
+        load_heimdall_pit_fixture('pit-print-ready-g991u'),
+      )
+    )
+
+    inspection = build_pit_inspection(
+      trace,
+      detected_product_code=session.product_code,
+      package_assessment=package_assessment,
+    )
+
+    self.assertEqual(inspection.source, PitSource.INTEGRATED_RUNTIME_PRINT_PIT)
+    self.assertEqual(inspection.state, PitInspectionState.CAPTURED)
+    self.assertIn('supported path', inspection.fallback_reason)
+
   def test_download_pit_trace_records_metadata_only_partial_state(self) -> None:
     session = build_demo_session('ready')
     package_assessment = build_demo_package_assessment('ready', session=session)
@@ -98,6 +122,51 @@ class PitContractTests(unittest.TestCase):
     self.assertEqual(inspection.state, PitInspectionState.MALFORMED)
     self.assertTrue(inspection.notes)
     self.assertIn('did not satisfy the repo-owned parser contract', inspection.summary)
+
+  def test_failed_integrated_runtime_pit_summary_surfaces_specific_reason(self) -> None:
+    trace = project_heimdall_trace_to_integrated_runtime(
+      normalize_heimdall_result(
+        build_print_pit_command_plan(),
+        HeimdallProcessResult(
+          fixture_name='pit-print-device-busy',
+          operation=HeimdallOperation.PRINT_PIT,
+          exit_code=1,
+          stdout_lines=(),
+          stderr_lines=('Error: Failed to claim interface for PIT read',),
+        ),
+      )
+    )
+
+    inspection = build_pit_inspection(trace)
+
+    self.assertEqual(inspection.state, PitInspectionState.FAILED)
+    self.assertIn('Supported-path PIT acquisition failed', inspection.summary)
+    self.assertIn('Reason: Failed to claim interface for PIT read.', inspection.summary)
+
+  def test_failed_integrated_runtime_pit_summary_normalizes_disconnect_noise(self) -> None:
+    trace = project_heimdall_trace_to_integrated_runtime(
+      normalize_heimdall_result(
+        build_download_pit_command_plan(output_path='artifacts/device.pit'),
+        HeimdallProcessResult(
+          fixture_name='pit-download-disconnected',
+          operation=HeimdallOperation.DOWNLOAD_PIT,
+          exit_code=1,
+          stdout_lines=(),
+          stderr_lines=(
+            "libusb: error [init_device] device '\\\\.\\USB#VID_04E8&PID_B7E8&MI_02#{6834F87EB9B80&0002}' is no longer connected!",
+          ),
+        ),
+      )
+    )
+
+    inspection = build_pit_inspection(trace)
+
+    self.assertEqual(inspection.state, PitInspectionState.FAILED)
+    self.assertIn(
+      'Reason: The supported-path transport lost access to the Samsung download-mode interface during PIT acquisition.',
+      inspection.summary,
+    )
+    self.assertNotIn('libusb:', inspection.summary)
 
   def test_preflight_overrides_follow_pit_inspection_alignment_truth(self) -> None:
     session = build_demo_session('ready')

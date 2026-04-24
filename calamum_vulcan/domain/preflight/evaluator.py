@@ -178,6 +178,15 @@ def _device_mode_signal(inputs: PreflightInput) -> PreflightSignal:
 
 def _device_registry_signal(inputs: PreflightInput) -> PreflightSignal:
   if not inputs.product_code:
+    if inputs.device_identity_review_deferred:
+      return PreflightSignal(
+        rule_id='device_registry',
+        category=PreflightCategory.COMPATIBILITY,
+        severity=PreflightSeverity.PASS,
+        title='Device identity review deferred',
+        summary='Registry-backed device identity review stays deferred until bounded PIT truth resolves the active download-mode target.',
+        remediation='Run Read PIT to gather bounded device identity before registry review.',
+      )
     return PreflightSignal(
       rule_id='device_registry',
       category=PreflightCategory.COMPATIBILITY,
@@ -299,6 +308,15 @@ def _package_presence_signal(inputs: PreflightInput) -> PreflightSignal:
       title='Package selected',
       summary='A package is staged for compatibility and integrity review.',
       remediation='No package-selection action required.',
+    )
+  if inputs.package_review_deferred:
+    return PreflightSignal(
+      rule_id='package_selected',
+      category=PreflightCategory.PACKAGE,
+      severity=PreflightSeverity.PASS,
+      title='Package stage deferred',
+      summary='Firmware package review stays deferred until bounded PIT truth is captured.',
+      remediation='Run Read PIT before staging package truth.',
     )
   return PreflightSignal(
     rule_id='package_selected',

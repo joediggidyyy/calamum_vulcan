@@ -49,7 +49,7 @@ GUI_REVIEW_SCENARIOS = (
   {
     'name': 'failure',
     'scenario': 'failure',
-    'transport_source': 'heimdall-adapter',
+    'transport_source': 'integrated-runtime',
     'package_fixture': 'scenario-default',
     'adapter_fixture': 'scenario-default',
   },
@@ -199,6 +199,7 @@ def _capture_gui_mode(
 
   with _installed_import_context(installed_root):
     from calamum_vulcan.app.demo import build_demo_adapter_session
+    from calamum_vulcan.app.demo import build_demo_integrated_runtime_session
     from calamum_vulcan.app.demo import build_demo_package_assessment
     from calamum_vulcan.app.demo import build_demo_pit_inspection
     from calamum_vulcan.app.demo import build_demo_session
@@ -209,11 +210,21 @@ def _capture_gui_mode(
     from calamum_vulcan.domain.reporting import build_session_evidence_report
     from calamum_vulcan.app.view_models import build_shell_view_model
 
+    transport_backend = 'heimdall'
     if transport_source == 'heimdall-adapter':
       session, package_assessment, transport_trace = build_demo_adapter_session(
         scenario,
         package_fixture_name=package_fixture,
         adapter_fixture_name=adapter_fixture,
+      )
+    elif transport_source == 'integrated-runtime':
+      transport_backend = 'integrated-runtime'
+      session, package_assessment, transport_trace = (
+        build_demo_integrated_runtime_session(
+          scenario,
+          package_fixture_name=package_fixture,
+          adapter_fixture_name=adapter_fixture,
+        )
       )
     else:
       session = build_demo_session(scenario)
@@ -229,6 +240,7 @@ def _capture_gui_mode(
       scenario,
       session=session,
       package_assessment=package_assessment,
+      transport_backend=transport_backend,
     )
 
     report = build_session_evidence_report(
@@ -237,6 +249,7 @@ def _capture_gui_mode(
       package_assessment=package_assessment,
       pit_inspection=pit_inspection,
       transport_trace=transport_trace,
+      transport_backend=transport_backend,
       captured_at_utc=captured_at_utc,
       pit_required_for_safe_path=True,
     )
@@ -247,6 +260,7 @@ def _capture_gui_mode(
       pit_inspection=pit_inspection,
       transport_trace=transport_trace,
       session_report=report,
+      transport_backend=transport_backend,
       pit_required_for_safe_path=True,
     )
 
@@ -381,7 +395,7 @@ def _write_summary_markdown(
     '',
     '- wheel: `{wheel}`'.format(wheel=wheel_path.name),
     '- install root: `{root}`'.format(root=install_root),
-    '- quickstart: installed help, ready describe-only, sprint-close bundle, and safe-path-close bundle all passed',
+    '- quickstart: installed help, ready describe-only, historical sprint-close bundle, and active autonomy-close bundle all passed',
     '- evidence review: blocked and failure Markdown exports remained readable and recovery-oriented',
     '- GUI review: screenshots captured for ready, blocked, and failure packaged scenarios',
     '',
@@ -473,14 +487,14 @@ def _run_empirical_review() -> int:
     'Installed sprint-close bundle lost the expected heading.',
   )
 
-  safe_path_close_path = ARCHIVE_ROOT / 'safe_path_close_bundle.md'
+  safe_path_close_path = ARCHIVE_ROOT / 'autonomy_close_bundle.md'
   _run_cli_probe(
     script_path,
     install_root,
     workdir,
     [
       '--integration-suite',
-      'safe-path-close',
+      'autonomy-close',
       '--suite-format',
       'markdown',
       '--suite-output',
@@ -492,8 +506,8 @@ def _run_empirical_review() -> int:
   safe_path_close_markdown = safe_path_close_path.read_text(encoding='utf-8')
   _assert_contains(
     safe_path_close_markdown,
-    'Calamum Vulcan FS4-07 safe-path-close bundle',
-    'Installed safe-path-close bundle lost the expected heading.',
+    'Calamum Vulcan FS6-05 autonomy-close bundle',
+    'Installed autonomy-close bundle lost the expected heading.',
   )
 
   blocked_evidence_path = ARCHIVE_ROOT / 'evidence' / 'blocked_review.md'
@@ -530,7 +544,7 @@ def _run_empirical_review() -> int:
       '--scenario',
       'failure',
       '--transport-source',
-      'heimdall-adapter',
+      'integrated-runtime',
       '--describe-only',
       '--export-evidence',
       '--evidence-format',
@@ -584,6 +598,7 @@ def _run_empirical_review() -> int:
       'help': 'passed',
       'ready_describe': 'passed',
       'sprint_close_bundle': 'passed',
+      'autonomy_close_bundle': 'passed',
     },
     'evidence_review': {
       'blocked_markdown': 'passed',

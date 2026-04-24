@@ -92,7 +92,7 @@ class USBScannerContractTests(unittest.TestCase):
     self.assertEqual(probe_result.devices, ())
     self.assertIn('did not detect', probe_result.summary.lower())
 
-  def test_scanner_surfaces_attention_when_usb_identity_strings_need_help(self) -> None:
+  def test_scanner_keeps_detected_download_mode_ready_when_usb_identity_strings_need_help(self) -> None:
     device = MockDevice(
       idVendor=0x04E8,
       idProduct=0x685D,
@@ -118,12 +118,12 @@ class USBScannerContractTests(unittest.TestCase):
 
     probe_result = scanner.probe_download_mode_devices()
 
-    self.assertEqual(probe_result.state, 'attention')
+    self.assertEqual(probe_result.state, 'detected')
     self.assertEqual(len(probe_result.devices), 1)
-    self.assertFalse(probe_result.devices[0].command_ready)
-    self.assertIn('operator attention', probe_result.summary.lower())
+    self.assertTrue(probe_result.devices[0].command_ready)
+    self.assertIn('download-mode presence only', ' '.join(probe_result.notes).lower())
 
-  def test_scanner_treats_no_langid_descriptor_errors_as_attention(self) -> None:
+  def test_scanner_treats_no_langid_descriptor_errors_as_detected_identity_incomplete(self) -> None:
     descriptor_error = MockUSBError(
       'The device has no langid (permission issue, no string descriptors supported or device error)'
     )
@@ -146,13 +146,37 @@ class USBScannerContractTests(unittest.TestCase):
 
     probe_result = scanner.probe_download_mode_devices()
 
-    self.assertEqual(probe_result.state, 'attention')
+    self.assertEqual(probe_result.state, 'detected')
     self.assertEqual(len(probe_result.devices), 1)
-    self.assertFalse(probe_result.devices[0].command_ready)
+    self.assertTrue(probe_result.devices[0].command_ready)
     self.assertEqual(probe_result.devices[0].serial_number, 'usb-1-4')
     self.assertIsNone(probe_result.devices[0].manufacturer)
     self.assertIsNone(probe_result.devices[0].product_name)
-    self.assertIn('operator attention', probe_result.summary.lower())
+    self.assertIn('download-mode presence only', ' '.join(probe_result.notes).lower())
+    self.assertIn('read pit', ' '.join(probe_result.notes).lower())
+
+  def test_scanner_can_skip_identity_string_reads_for_presence_only_detection(self) -> None:
+    descriptor_error = MockUSBError('descriptor access should not be attempted')
+    scanner = VulcanUSBScanner(
+      usb_core_module=MockUSBCore(
+        devices=(
+          _LangIdDirectPropertyDevice(descriptor_error),
+        )
+      ),
+      usb_util_module=MockUSBUtil,
+      backend_factory=lambda _path: MockBackend(),
+      platform_name='win32',
+    )
+
+    probe_result = scanner.probe_download_mode_devices(read_identity_strings=False)
+
+    self.assertEqual(probe_result.state, 'detected')
+    self.assertEqual(len(probe_result.devices), 1)
+    self.assertEqual(probe_result.devices[0].serial_number, 'usb-1-4')
+    self.assertEqual(probe_result.devices[0].manufacturer, 'Samsung')
+    self.assertEqual(probe_result.devices[0].product_name, 'Samsung download mode')
+    self.assertIsNone(probe_result.devices[0].product_code)
+    self.assertNotIn('download-mode presence only', ' '.join(probe_result.notes).lower())
 
   def test_scanner_requests_windows_remediation_when_backend_is_missing(self) -> None:
     launched = []

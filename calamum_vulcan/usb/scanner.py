@@ -113,6 +113,14 @@ class USBProbeResult:
     remediation_command: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class _NormalizedUSBDevice:
+    """Internal normalized USB result with supplementary descriptor notes."""
+
+    descriptor: USBDeviceDescriptor
+    notes: Tuple[str, ...] = ()
+
+
 def _normalize_text(value: object) -> Optional[str]:
     """Return one trimmed text value or ``None`` when it is blank."""
 
@@ -148,7 +156,10 @@ class VulcanUSBScanner:
         self._backend_note = 'Native USB backend has not been initialized yet.'
         self._init_backend(backend_path)
 
-    def probe_download_mode_devices(self) -> USBProbeResult:
+    def probe_download_mode_devices(
+        self,
+        read_identity_strings: bool = True,
+    ) -> USBProbeResult:
         """Detect Samsung download-mode devices through the native USB seam."""
 
         repair_note = None  # type: Optional[str]
@@ -242,9 +253,27 @@ class VulcanUSBScanner:
                 notes=tuple(notes),
             )
 
+        normalized_results_list = []  # type: list[_NormalizedUSBDevice]
+        for device in devices:
+            try:
+                normalized_results_list.append(
+                    self._normalize_device(
+                        device,
+                        read_identity_strings=read_identity_strings,
+                    )
+                )
+            finally:
+                if self._usb_util is not None and hasattr(self._usb_util, 'dispose_resources'):
+                    try:
+                        self._usb_util.dispose_resources(device)
+                    except Exception:
+                        self.logger.debug(
+                            'Native USB resource disposal raised after probe normalization.',
+                            exc_info=True,
+                        )
+        normalized_results = tuple(normalized_results_list)
         normalized_devices = tuple(
-            self._normalize_device(device)
-            for device in devices
+            result.descriptor for result in normalized_results
         )
         if not normalized_devices:
             return USBProbeResult(
@@ -257,35 +286,22 @@ class VulcanUSBScanner:
                 ),
             )
 
-        requires_attention = any(
-            not device.command_ready for device in normalized_devices
+        summary = (
+            'Native USB scan detected a Samsung download-mode device.'
+            if len(normalized_devices) == 1
+            else 'Native USB scan detected Samsung download-mode devices.'
         )
-        if requires_attention:
-            summary = (
-                'Native USB scan detected a Samsung download-mode device, but richer '
-                'USB identity strings still need operator attention.'
-                if len(normalized_devices) == 1
-                else (
-                    'Native USB scan detected Samsung download-mode devices, but some '
-                    'USB identity strings still need operator attention.'
-                )
-            )
-            state = 'attention'
-        else:
-            summary = (
-                'Native USB scan detected a Samsung download-mode device.'
-                if len(normalized_devices) == 1
-                else 'Native USB scan detected Samsung download-mode devices.'
-            )
-            state = 'detected'
+        state = 'detected'
 
         notes = [self._backend_note]
         if repair_note is not None:
             notes.insert(0, repair_note)
+        for result in normalized_results:
+            notes.extend(result.notes)
         if any(device.product_code is None for device in normalized_devices):
             notes.append(
                 'USB descriptors did not expose a Samsung product code for every '
-                'detected device.'
+                'detected device; continue with bounded download-mode presence and use Read PIT to gather stronger device truth.'
             )
         return USBProbeResult(
             state=state,
@@ -431,41 +447,64 @@ class VulcanUSBScanner:
             return False
         return product_id in SAMSUNG_DOWNLOAD_MODE_PRODUCT_IDS
 
-    def _normalize_device(self, device) -> USBDeviceDescriptor:
+    def _normalize_device(
+        self,
+        device,
+        read_identity_strings: bool = True,
+    ) -> _NormalizedUSBDevice:
         """Normalize one raw pyusb device into a stable descriptor surface."""
 
-        serial_number, serial_issue = self._read_descriptor_string(
-            device,
-            direct_attribute='serial_number',
-            index_attribute='iSerialNumber',
-        )
-        manufacturer, manufacturer_issue = self._read_descriptor_string(
-            device,
-            direct_attribute='manufacturer',
-            index_attribute='iManufacturer',
-        )
-        product_name, product_issue = self._read_descriptor_string(
-            device,
-            direct_attribute='product',
-            index_attribute='iProduct',
-        )
-        product_code = self._extract_product_code(product_name, serial_number)
         bus = getattr(device, 'bus', None)
         address = getattr(device, 'address', None)
         fallback_serial = 'usb-{bus}-{address}'.format(
             bus=(bus if bus is not None else 'unknownbus'),
             address=(address if address is not None else 'unknownaddr'),
         )
-        return USBDeviceDescriptor(
-            vendor_id=int(getattr(device, 'idVendor', SAMSUNG_VENDOR_ID)),
-            product_id=int(getattr(device, 'idProduct', 0)),
-            bus=(int(bus) if bus is not None else None),
-            address=(int(address) if address is not None else None),
-            serial_number=serial_number or fallback_serial,
-            manufacturer=manufacturer,
-            product_name=product_name,
-            product_code=product_code,
-            command_ready=not any((serial_issue, manufacturer_issue, product_issue)),
+        serial_number = fallback_serial
+        manufacturer = 'Samsung'
+        product_name = SAMSUNG_DOWNLOAD_MODE_PRODUCT_IDS.get(
+            int(getattr(device, 'idProduct', 0)),
+            'Samsung download device',
+        )
+        product_code = None
+        serial_issue = False
+        manufacturer_issue = False
+        product_issue = False
+        if read_identity_strings:
+            serial_number, serial_issue = self._read_descriptor_string(
+                device,
+                direct_attribute='serial_number',
+                index_attribute='iSerialNumber',
+            )
+            manufacturer, manufacturer_issue = self._read_descriptor_string(
+                device,
+                direct_attribute='manufacturer',
+                index_attribute='iManufacturer',
+            )
+            product_name, product_issue = self._read_descriptor_string(
+                device,
+                direct_attribute='product',
+                index_attribute='iProduct',
+            )
+            product_code = self._extract_product_code(product_name, serial_number)
+        notes = []  # type: list[str]
+        if any((serial_issue, manufacturer_issue, product_issue)):
+            notes.append(
+                'One or more USB identity strings could not be read through the current access path; continuing with bounded download-mode presence only.'
+            )
+        return _NormalizedUSBDevice(
+            descriptor=USBDeviceDescriptor(
+                vendor_id=int(getattr(device, 'idVendor', SAMSUNG_VENDOR_ID)),
+                product_id=int(getattr(device, 'idProduct', 0)),
+                bus=(int(bus) if bus is not None else None),
+                address=(int(address) if address is not None else None),
+                serial_number=serial_number or fallback_serial,
+                manufacturer=manufacturer,
+                product_name=product_name,
+                product_code=product_code,
+                command_ready=True,
+            ),
+            notes=tuple(notes),
         )
 
     def _read_descriptor_string(

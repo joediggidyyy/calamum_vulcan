@@ -180,7 +180,7 @@ def build_session_authority_snapshot(
     pit_required_for_safe_path=pit_required_for_safe_path,
   )
   reviewed_phase_label = PHASE_LABELS[session.phase]
-  reviewed_target_label = _reviewed_target_label(session.phase)
+  reviewed_target_label = _reviewed_target_label(session)
   reviewed_phase_tone = PHASE_TONES[session.phase]
   live_phase_label, live_phase_tone = _live_phase(session)
   selected_launch_path = _selected_launch_path(
@@ -274,12 +274,49 @@ def _live_phase(session: PlatformSession) -> Tuple[str, str]:
   return PHASE_LABELS[session.phase], PHASE_TONES[session.phase]
 
 
-def _reviewed_target_label(phase: SessionPhase) -> str:
-  """Return the explicit reviewed-target label without live-phase overrides."""
+def _reviewed_target_label(session: PlatformSession) -> str:
+  """Return the explicit reviewed-target label with bounded target truth."""
 
-  if phase == SessionPhase.NO_DEVICE:
+  download_mode_target_label = _download_mode_review_target_label(session)
+  if download_mode_target_label is not None:
+    return download_mode_target_label
+  if session.phase == SessionPhase.NO_DEVICE:
     return 'No Download-Mode Target'
-  return PHASE_LABELS[phase]
+  return PHASE_LABELS[session.phase]
+
+
+def _download_mode_review_target_label(
+  session: PlatformSession,
+) -> Optional[str]:
+  """Return a reviewed-target label when current truth is a real download-mode target."""
+
+  if session.phase not in (
+    SessionPhase.NO_DEVICE,
+    SessionPhase.DEVICE_DETECTED,
+  ):
+    return None
+  snapshot = session.live_detection.snapshot
+  has_download_mode_target = bool(
+    (
+      snapshot is not None
+      and snapshot.source in (
+        LiveDeviceSource.USB,
+        LiveDeviceSource.HEIMDALL,
+      )
+    )
+    or (
+      session.guards.has_device
+      and (session.mode or '').strip().lower() == 'download'
+    )
+  )
+  if not has_download_mode_target:
+    return None
+  if (
+    session.live_detection.state == LiveDetectionState.ATTENTION
+    or (snapshot is not None and not snapshot.command_ready)
+  ):
+    return 'Download-Mode Target Attention'
+  return 'Download-Mode Target Detected'
 
 
 def _selected_launch_path(

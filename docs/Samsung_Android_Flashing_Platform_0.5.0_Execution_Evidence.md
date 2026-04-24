@@ -906,6 +906,16 @@ Current recommendation preserved here:
 - capture the real Heimdall detect stdout/stderr shapes that currently fail normalization and widen the detect parser / operator guidance so standard Samsung download-mode detection becomes trustworthy on reviewed hardware rather than merely reaching the delegated backend
 - keep the Sprint 5 wording explicit in code/docs/evidence while carrying true native-default transport extraction and Heimdall demotion criteria into the future `0.5.0` lane instead of quietly redefining the current sprint
 
+Late empirical follow-up preserved here (2026-04-23):
+
+- compact header-pill wording should drop redundant field nouns when the field label is already visible; the `Gate` pill should render values such as `Blocked`, `Warn`, `Ready`, and `Standby` rather than `Gate Blocked` / `Gate Ready`
+- explanatory helper prose should keep moving out of always-on small text and into hover tooltips or equivalent on-demand disclosure once the shell wires tooltip support for header pills and control-deck actions
+- the agreed next-step cue did **not** change: green remains the single settled signal for the one next required or strongest recommended action; any current blue `primary` treatment is implementation drift, not a newly accepted plan change
+- the prior plan explicitly called for a text-color next-step cue; a border accent may accompany it, but the border is secondary and may not replace the agreed text-color signal
+- when one action is both the next workflow step and the current warning/retry target, keep the text green so the operator can still read `do this button next` at a glance, and let the border carry the warn/block severity (`warning` / `danger`) so workflow priority and remediation severity stay visible at the same time
+- if `Detect device` ends in `attention`, `failed`, or another non-command-ready posture and no later deck step is honestly available, do not mark `Detect device` as completed; it should remain the deck's next suggested action until the blocking condition is cleared or a more specific contextual remediation control exists
+- `Read PIT` should stay disabled until the detect path is honestly PIT-capable / command-ready; the design correction for that situation is not to advance the deck prematurely, but to preserve a visible next-step indicator on `Detect device` (with warning/danger border semantics where appropriate)
+
 Planned owning stack: `FS5-06` for operator-surface honesty and runtime-behavior cleanup, with any resulting execute-lane prerequisite tightening carrying forward into later Sprint 5 closeout work as needed.
 
 ## `FS5-06` — Runtime hygiene, transcript policy, and operator-surface honesty

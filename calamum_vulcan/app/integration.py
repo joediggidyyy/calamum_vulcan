@@ -38,6 +38,7 @@ from calamum_vulcan.usb import USBDeviceDescriptor
 from calamum_vulcan.usb import USBProbeResult
 
 from .demo import build_demo_adapter_session
+from .demo import build_demo_integrated_runtime_session
 from .demo import build_demo_package_assessment
 from .demo import build_demo_pit_inspection
 from .demo import build_demo_session
@@ -47,11 +48,14 @@ from .view_models import build_shell_view_model
 from .view_models import describe_shell
 
 
+AUTONOMY_CLOSE_SUITE_NAME = 'autonomy-close'
+
 INTEGRATION_SUITE_NAMES = (
   'sprint-close',
   'orchestration-close',
   'read-side-close',
   SAFE_PATH_CLOSE_SUITE_NAME,
+  AUTONOMY_CLOSE_SUITE_NAME,
 )
 
 PLANNED_INTEGRATION_SUITE_NAMES = ()
@@ -82,6 +86,13 @@ SAFE_PATH_CLOSE_CARRY_FORWARD_DEBT = (
   'Promote GUI package-load and bounded execute controls only after the new deck contract survives wider operator trials.',
   'Expand real-hardware Heimdall detect fixtures so normalization coverage keeps pace with reviewed Samsung download-mode output variants.',
   'Keep publication rehearsal and any future registry automation out of the historical safe-path-close contract; revisit them only in the active sprint closeout surfaces.',
+)
+
+AUTONOMY_CLOSE_CARRY_FORWARD_DEBT = (
+  'Open the `1.0.0` promotion gate only after full-spectrum functional, adversarial, empirical, packaging, and registry validation are rerun against the sealed `0.6.0` candidate.',
+  'Reduce the warning-tier checksum-placeholder fixture debt before public promotion so the operator-facing release posture carries fewer accepted caveats.',
+  'Keep any retained Heimdall-derived lower transport packaged behind the `integrated-runtime` boundary and do not reintroduce external Heimdall as an operator-visible prerequisite.',
+  'Treat host-matrix widening and renewed public publication as promotion-gate work, not as hidden Sprint 6 scope creep.',
 )
 
 
@@ -340,6 +351,36 @@ def build_safe_path_close_bundle(
   )
 
 
+def build_autonomy_close_bundle(
+  captured_at_utc: Optional[str] = None,
+) -> SprintCloseBundle:
+  """Build the FS6-05 autonomy-close bundle for Sprint 0.6.0."""
+
+  captured = captured_at_utc or _utc_now()
+  scenarios = _build_autonomy_close_scenarios(captured)
+  proof_points = _build_autonomy_close_proof_points(scenarios)
+  passed_count = sum(1 for point in proof_points if point.passed)
+  summary = (
+    'Sprint 0.6.0 closes with {passed}/{total} autonomy-close proof points '
+    'satisfied across {scenario_count} integrated scenarios.'.format(
+      passed=passed_count,
+      total=len(proof_points),
+      scenario_count=len(scenarios),
+    )
+  )
+  return SprintCloseBundle(
+    schema_version=REPORT_SCHEMA_VERSION,
+    bundle_id=_bundle_id(captured, prefix='cv-fs6-05-autonomy-close'),
+    release_version='0.6.0',
+    suite_name=AUTONOMY_CLOSE_SUITE_NAME,
+    captured_at_utc=captured,
+    summary=summary,
+    proof_points=proof_points,
+    scenarios=scenarios,
+    carry_forward_debt=AUTONOMY_CLOSE_CARRY_FORWARD_DEBT,
+  )
+
+
 def serialize_sprint_close_bundle_json(bundle: SprintCloseBundle) -> str:
   """Render one sprint-close bundle as formatted JSON."""
 
@@ -497,6 +538,7 @@ def _build_scenario_result_from_context(
   package_assessment: Optional[object] = None,
   pit_inspection: Optional[object] = None,
   transport_trace: Optional[object] = None,
+  transport_backend: str = 'heimdall',
   pit_required_for_safe_path: bool = False,
 ) -> SprintCloseScenarioResult:
   """Build one integrated scenario result from explicit session context."""
@@ -507,6 +549,7 @@ def _build_scenario_result_from_context(
     package_assessment=package_assessment,
     pit_inspection=pit_inspection,
     transport_trace=transport_trace,
+    transport_backend=transport_backend,
     captured_at_utc=captured_at_utc,
     pit_required_for_safe_path=pit_required_for_safe_path,
   )
@@ -517,6 +560,7 @@ def _build_scenario_result_from_context(
     pit_inspection=pit_inspection,
     transport_trace=transport_trace,
     session_report=report,
+    transport_backend=transport_backend,
     pit_required_for_safe_path=pit_required_for_safe_path,
   )
   enabled_actions = tuple(
@@ -566,6 +610,13 @@ def _resolve_scenario_inputs(
 ) -> Tuple[PlatformSession, Optional[object], Optional[object]]:
   if spec.scenario_key is None:
     return PlatformSession(), None, None
+
+  if spec.transport_source == 'integrated-runtime':
+    return build_demo_integrated_runtime_session(
+      spec.scenario_key,
+      package_fixture_name=spec.package_fixture or 'scenario-default',
+      adapter_fixture_name=spec.adapter_fixture or 'scenario-default',
+    )
 
   if spec.transport_source == 'heimdall-adapter':
     return build_demo_adapter_session(
@@ -910,11 +961,12 @@ def _build_safe_path_close_scenarios(
     ),
   )
 
-  runtime_session, runtime_package, runtime_trace = build_demo_adapter_session('ready')
+  runtime_session, runtime_package, runtime_trace = build_demo_integrated_runtime_session('ready')
   runtime_pit = build_demo_pit_inspection(
     'ready',
     session=build_demo_session('ready'),
     package_assessment=runtime_package,
+    transport_backend='integrated-runtime',
   )
   runtime_session = replace(
     runtime_session,
@@ -994,7 +1046,7 @@ def _build_safe_path_close_scenarios(
     _build_scenario_result_from_context(
       scenario_id='safe-path-runtime-complete',
       scenario_name='Bounded safe-path runtime complete',
-      transport_source='heimdall-adapter',
+      transport_source='integrated-runtime',
       package_fixture=runtime_package.fixture_name,
       captured_at_utc=captured_at_utc,
       session=runtime_session,
@@ -1012,6 +1064,215 @@ def _build_safe_path_close_scenarios(
       session=mismatch_session,
       package_assessment=mismatch_package,
       pit_inspection=mismatch_pit,
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='fastboot-fallback-boundary-review',
+      scenario_name='Fastboot fallback boundary review',
+      transport_source='fastboot-read-side',
+      package_fixture=None,
+      captured_at_utc=captured_at_utc,
+      session=fastboot_fallback_session,
+      package_assessment=None,
+      pit_inspection=None,
+      pit_required_for_safe_path=True,
+    ),
+  )
+
+
+def _build_autonomy_close_scenarios(
+  captured_at_utc: str,
+) -> Tuple[SprintCloseScenarioResult, ...]:
+  """Return the deterministic FS6-05 autonomy closeout scenario matrix."""
+
+  download_live_detection = _ready_usb_live_detection()
+
+  read_pit_required_session = replace(
+    build_demo_session('no-device'),
+    live_detection=download_live_detection,
+  )
+
+  ready_session = build_demo_session('ready')
+  ready_package = build_demo_package_assessment('ready', session=ready_session)
+  ready_pit = build_demo_pit_inspection(
+    'ready',
+    session=ready_session,
+    package_assessment=ready_package,
+    transport_backend='integrated-runtime',
+  )
+  ready_session = replace(
+    ready_session,
+    live_detection=download_live_detection,
+    inspection=build_inspection_workflow(
+      download_live_detection,
+      pit_inspection=ready_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  runtime_complete_session, runtime_complete_package, runtime_complete_trace = (
+    build_demo_integrated_runtime_session('ready')
+  )
+  runtime_complete_pit = build_demo_pit_inspection(
+    'ready',
+    session=runtime_complete_session,
+    package_assessment=runtime_complete_package,
+    transport_backend='integrated-runtime',
+  )
+  runtime_complete_session = replace(
+    runtime_complete_session,
+    live_detection=download_live_detection,
+    inspection=build_inspection_workflow(
+      download_live_detection,
+      pit_inspection=runtime_complete_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  runtime_failure_session, runtime_failure_package, runtime_failure_trace = (
+    build_demo_integrated_runtime_session('failure')
+  )
+  runtime_failure_pit = build_demo_pit_inspection(
+    'failure',
+    session=runtime_failure_session,
+    package_assessment=runtime_failure_package,
+    transport_backend='integrated-runtime',
+  )
+  runtime_failure_session = replace(
+    runtime_failure_session,
+    live_detection=download_live_detection,
+    inspection=build_inspection_workflow(
+      download_live_detection,
+      pit_inspection=runtime_failure_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  runtime_resume_session, runtime_resume_package, runtime_resume_trace = (
+    build_demo_integrated_runtime_session('resume')
+  )
+  runtime_resume_pit = build_demo_pit_inspection(
+    'resume',
+    session=runtime_resume_session,
+    package_assessment=runtime_resume_package,
+    transport_backend='integrated-runtime',
+  )
+  runtime_resume_session = replace(
+    runtime_resume_session,
+    live_detection=download_live_detection,
+    inspection=build_inspection_workflow(
+      download_live_detection,
+      pit_inspection=runtime_resume_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  mismatch_session = build_demo_session('blocked')
+  mismatch_package = build_demo_package_assessment(
+    'blocked',
+    session=mismatch_session,
+  )
+  mismatch_pit = build_demo_pit_inspection(
+    'blocked',
+    session=mismatch_session,
+    package_assessment=mismatch_package,
+    transport_backend='integrated-runtime',
+  )
+  mismatch_session = replace(
+    mismatch_session,
+    live_detection=download_live_detection,
+    inspection=build_inspection_workflow(
+      download_live_detection,
+      pit_inspection=mismatch_pit,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  fastboot_fallback = _fastboot_fallback_detection(device_present=True)
+  fastboot_fallback_session = replace(
+    build_demo_session('no-device'),
+    live_detection=fastboot_fallback,
+    inspection=build_inspection_workflow(
+      fastboot_fallback,
+      pit_inspection=None,
+      captured_at_utc=captured_at_utc,
+    ),
+  )
+
+  return (
+    _build_scenario_result_from_context(
+      scenario_id='read-pit-required-review',
+      scenario_name='Read PIT required review',
+      transport_source='integrated-runtime',
+      package_fixture=None,
+      captured_at_utc=captured_at_utc,
+      session=read_pit_required_session,
+      package_assessment=None,
+      pit_inspection=None,
+      transport_backend='integrated-runtime',
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='supported-path-ready-review',
+      scenario_name='Supported-path integrated-runtime ready review',
+      transport_source='integrated-runtime',
+      package_fixture=ready_package.fixture_name,
+      captured_at_utc=captured_at_utc,
+      session=ready_session,
+      package_assessment=ready_package,
+      pit_inspection=ready_pit,
+      transport_backend='integrated-runtime',
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='integrated-runtime-complete',
+      scenario_name='Integrated-runtime completion review',
+      transport_source='integrated-runtime',
+      package_fixture=runtime_complete_package.fixture_name,
+      captured_at_utc=captured_at_utc,
+      session=runtime_complete_session,
+      package_assessment=runtime_complete_package,
+      pit_inspection=runtime_complete_pit,
+      transport_trace=runtime_complete_trace,
+      transport_backend='integrated-runtime',
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='integrated-runtime-failure-review',
+      scenario_name='Integrated-runtime failure review',
+      transport_source='integrated-runtime',
+      package_fixture=runtime_failure_package.fixture_name,
+      captured_at_utc=captured_at_utc,
+      session=runtime_failure_session,
+      package_assessment=runtime_failure_package,
+      pit_inspection=runtime_failure_pit,
+      transport_trace=runtime_failure_trace,
+      transport_backend='integrated-runtime',
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='integrated-runtime-resume-review',
+      scenario_name='Integrated-runtime resume review',
+      transport_source='integrated-runtime',
+      package_fixture=runtime_resume_package.fixture_name,
+      captured_at_utc=captured_at_utc,
+      session=runtime_resume_session,
+      package_assessment=runtime_resume_package,
+      pit_inspection=runtime_resume_pit,
+      transport_trace=runtime_resume_trace,
+      transport_backend='integrated-runtime',
+      pit_required_for_safe_path=True,
+    ),
+    _build_scenario_result_from_context(
+      scenario_id='pit-mismatch-block-review',
+      scenario_name='Integrated-runtime PIT mismatch block review',
+      transport_source='integrated-runtime',
+      package_fixture=mismatch_package.fixture_name,
+      captured_at_utc=captured_at_utc,
+      session=mismatch_session,
+      package_assessment=mismatch_package,
+      pit_inspection=mismatch_pit,
+      transport_backend='integrated-runtime',
       pit_required_for_safe_path=True,
     ),
     _build_scenario_result_from_context(
@@ -1185,12 +1446,94 @@ def _build_safe_path_close_proof_points(
     SprintCloseProofPoint(
       label='Resolved runtime hands off to exportable evidence and preserved transcript artifacts',
       passed=runtime_evidence_handoff,
-      summary='The completed runtime scenario keeps execute marked complete, export marked next, and the bounded transcript preserved for closeout review.',
+      summary='The completed integrated-runtime scenario keeps execute marked complete, export marked next, and the bounded transcript preserved for closeout review.',
     ),
     SprintCloseProofPoint(
       label='Fallback boundaries remain explicit when PIT-capable truth is absent',
       passed=fallback_boundaries_hold,
       summary='Fastboot fallback review stays visibly engaged and does not pretend that PIT or bounded safe-path execution is currently available.',
+    ),
+  )
+
+
+def _build_autonomy_close_proof_points(
+  scenarios: Tuple[SprintCloseScenarioResult, ...],
+) -> Tuple[SprintCloseProofPoint, ...]:
+  """Return proof points for the FS6-05 autonomy closeout suite."""
+
+  scenario_map = {scenario.scenario_id: scenario for scenario in scenarios}
+  read_pit_required = scenario_map['read-pit-required-review']
+  supported_ready = scenario_map['supported-path-ready-review']
+  runtime_complete = scenario_map['integrated-runtime-complete']
+  runtime_failure = scenario_map['integrated-runtime-failure-review']
+  runtime_resume = scenario_map['integrated-runtime-resume-review']
+  pit_mismatch = scenario_map['pit-mismatch-block-review']
+  fallback_boundary = scenario_map['fastboot-fallback-boundary-review']
+
+  shell_contract_holds = all(
+    scenario.panel_titles == PANEL_TITLES for scenario in scenarios
+  ) and all(
+    scenario.export_targets == REPORT_EXPORT_TARGETS for scenario in scenarios
+  )
+  supported_path_review_holds = (
+    supported_ready.transport_source == 'integrated-runtime'
+    and supported_ready.live_source == 'usb'
+    and supported_ready.gate_label == 'Gate Ready'
+    and supported_ready.pit_source == 'integrated_runtime_print_pit'
+    and _action_state(supported_ready, 'Execute flash plan') == 'next'
+  )
+  integrated_runtime_closure_holds = (
+    runtime_complete.transport_source == 'integrated-runtime'
+    and runtime_complete.transport_state == 'completed'
+    and runtime_complete.transcript_preserved
+    and runtime_failure.transport_source == 'integrated-runtime'
+    and runtime_failure.transport_state == 'failed'
+    and runtime_failure.transcript_preserved
+    and runtime_resume.transport_source == 'integrated-runtime'
+    and runtime_resume.transport_state == 'completed'
+    and runtime_resume.transcript_preserved
+    and _action_state(runtime_complete, 'Export evidence') == 'next'
+  )
+  blocked_path_holds = (
+    read_pit_required.gate_label == 'Gate Blocked'
+    and _action_state(read_pit_required, 'Read PIT') == 'next'
+    and pit_mismatch.gate_label == 'Gate Blocked'
+    and pit_mismatch.pit_package_alignment == 'mismatched'
+    and _action_state(pit_mismatch, 'Execute flash plan') == 'unavailable'
+  )
+  fallback_quarantine_holds = (
+    fallback_boundary.live_source == 'fastboot'
+    and fallback_boundary.live_fallback_posture == 'engaged'
+    and fallback_boundary.transport_state == 'not_invoked'
+    and _action_state(fallback_boundary, 'Read PIT') == 'unavailable'
+    and _action_state(fallback_boundary, 'Execute flash plan') == 'unavailable'
+  )
+
+  return (
+    SprintCloseProofPoint(
+      label='Supported-path review now speaks in integrated-runtime terms',
+      passed=supported_path_review_holds,
+      summary='The ready supported-path review keeps native USB identity, integrated-runtime PIT sourcing, and execute-next posture without flattening fallback lanes into the supported promise.',
+    ),
+    SprintCloseProofPoint(
+      label='Integrated-runtime completion, failure, and resume all preserve bounded transcript evidence',
+      passed=integrated_runtime_closure_holds,
+      summary='The autonomy candidate now carries completion, failure, and resume runtime proof through integrated-runtime scenarios instead of the historical adapter closeout lane.',
+    ),
+    SprintCloseProofPoint(
+      label='Missing or mismatched PIT truth still blocks the supported path honestly',
+      passed=blocked_path_holds,
+      summary='Read-PIT-required and PIT-mismatch scenarios stay blocked and keep execute unavailable until the reviewed runtime prerequisites are truly satisfied.',
+    ),
+    SprintCloseProofPoint(
+      label='Fallback and fastboot boundary lanes remain explicit and outside the supported promise',
+      passed=fallback_quarantine_holds,
+      summary='The fastboot fallback review remains visibly engaged and non-transporting rather than being quietly flattened into integrated-runtime success wording.',
+    ),
+    SprintCloseProofPoint(
+      label='The autonomy closeout bundle remains exportable and shell-contract stable across all Sprint 6 review states',
+      passed=shell_contract_holds,
+      summary='All autonomy-close scenarios preserve the five-panel shell contract and keep JSON/Markdown export targets available for closeout review.',
     ),
   )
 
@@ -1303,6 +1646,8 @@ def _ready_pit_inspection(
 
 
 def _bundle_heading(bundle: SprintCloseBundle) -> str:
+  if bundle.suite_name == AUTONOMY_CLOSE_SUITE_NAME:
+    return '## Calamum Vulcan FS6-05 autonomy-close bundle'
   if bundle.suite_name == SAFE_PATH_CLOSE_SUITE_NAME:
     return '## Calamum Vulcan FS4-07 safe-path-close bundle'
   if bundle.suite_name == 'read-side-close':
@@ -1313,6 +1658,8 @@ def _bundle_heading(bundle: SprintCloseBundle) -> str:
 
 
 def _carry_forward_heading(bundle: SprintCloseBundle) -> str:
+  if bundle.suite_name == AUTONOMY_CLOSE_SUITE_NAME:
+    return '### Carry-forward debt into 1.0.0'
   if bundle.suite_name == SAFE_PATH_CLOSE_SUITE_NAME:
     return '### Carry-forward debt into 0.5.0'
   if bundle.suite_name == 'read-side-close':

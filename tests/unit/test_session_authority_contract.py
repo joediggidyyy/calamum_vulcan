@@ -211,6 +211,62 @@ class SessionAuthorityContractTests(unittest.TestCase):
     self.assertIn('Refresh live detection', authority.refresh_reason)
     self.assertIn('needs operator attention', authority.block_reason)
 
+  def test_download_mode_live_target_promotes_reviewed_target_label(self) -> None:
+    session = build_demo_session('no-device')
+    session = replace(
+      session,
+      live_detection=LiveDetectionSession(
+        state=LiveDetectionState.DETECTED,
+        summary='Native USB detected a Samsung download-mode target for bounded PIT review.',
+        source=LiveDeviceSource.USB,
+        source_labels=('usb',),
+        fallback_posture=LiveFallbackPosture.NOT_NEEDED,
+        snapshot=LiveDeviceSnapshot(
+          source=LiveDeviceSource.USB,
+          serial='usb-1-13',
+          connection_state='download',
+          transport='download-mode',
+          mode='usb/download',
+          command_ready=True,
+          support_posture=LiveDeviceSupportPosture.IDENTITY_INCOMPLETE,
+          info_state=LiveDeviceInfoState.UNAVAILABLE,
+        ),
+      ),
+    )
+
+    authority = build_session_authority_snapshot(session)
+
+    self.assertEqual(authority.reviewed_target_label, 'Download-Mode Target Detected')
+    self.assertEqual(authority.live_phase_label, 'Download-Mode Device Detected')
+
+  def test_download_mode_attention_promotes_reviewed_target_attention_label(self) -> None:
+    session = build_demo_session('no-device')
+    session = replace(
+      session,
+      live_detection=LiveDetectionSession(
+        state=LiveDetectionState.ATTENTION,
+        summary='Native USB found download mode, but direct USB access still needs attention.',
+        source=LiveDeviceSource.USB,
+        source_labels=('usb',),
+        fallback_posture=LiveFallbackPosture.NOT_NEEDED,
+        snapshot=LiveDeviceSnapshot(
+          source=LiveDeviceSource.USB,
+          serial='usb-1-13',
+          connection_state='download',
+          transport='download-mode',
+          mode='usb/download',
+          command_ready=False,
+          support_posture=LiveDeviceSupportPosture.IDENTITY_INCOMPLETE,
+          info_state=LiveDeviceInfoState.UNAVAILABLE,
+        ),
+      ),
+    )
+
+    authority = build_session_authority_snapshot(session)
+
+    self.assertEqual(authority.reviewed_target_label, 'Download-Mode Target Attention')
+    self.assertEqual(authority.live_phase_label, 'Download-Mode Device Attention')
+
   def test_pit_device_mismatch_blocks_safe_path_candidate(self) -> None:
     session = build_demo_session('ready')
     package_assessment = build_demo_package_assessment('ready', session=session)

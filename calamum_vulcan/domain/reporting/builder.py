@@ -64,6 +64,7 @@ def build_session_evidence_report(
   package_assessment: Optional[PackageManifestAssessment] = None,
   pit_inspection: Optional[PitInspection] = None,
   transport_trace: Optional[HeimdallNormalizedTrace] = None,
+  transport_backend: str = 'heimdall',
   captured_at_utc: Optional[str] = None,
   pit_required_for_safe_path: bool = False,
 ) -> SessionEvidenceReport:
@@ -79,7 +80,10 @@ def build_session_evidence_report(
     )
   reviewed_flash_plan = None  # type: Optional[ReviewedFlashPlan]
   if package_assessment is not None:
-    reviewed_flash_plan = build_reviewed_flash_plan(package_assessment)
+    reviewed_flash_plan = build_reviewed_flash_plan(
+      package_assessment,
+      transport_backend=transport_backend,
+    )
 
   captured = captured_at_utc or _utc_now()
   report_id = _report_id(captured, session, scenario_name)
@@ -116,7 +120,11 @@ def build_session_evidence_report(
   )
   pit = _build_pit_evidence(pit_inspection)
   package = _build_package_evidence(session, package_assessment)
-  flash_plan = _build_flash_plan_evidence(package_assessment, reviewed_flash_plan)
+  flash_plan = _build_flash_plan_evidence(
+    package_assessment,
+    reviewed_flash_plan,
+    transport_backend=transport_backend,
+  )
   preflight = PreflightEvidence(
     gate=report.gate.value,
     ready_for_execution=report.ready_for_execution,
@@ -126,7 +134,11 @@ def build_session_evidence_report(
     warning_count=report.warning_count,
     block_count=report.block_count,
   )
-  transport = _build_transport_evidence(session, transport_trace)
+  transport = _build_transport_evidence(
+    session,
+    transport_trace,
+    transport_backend=transport_backend,
+  )
   transcript = _build_transcript_evidence(transport_trace, report_id)
   outcome = OutcomeEvidence(
     outcome=_outcome_label(session),
@@ -605,7 +617,7 @@ def render_transport_transcript_text(
     'report_id={report_id}'.format(report_id=report.report_id),
     'scenario={scenario}'.format(scenario=report.scenario_name),
     'captured_at_utc={captured}'.format(captured=report.captured_at_utc),
-    'adapter=heimdall',
+    'adapter={adapter}'.format(adapter=_transport_trace_adapter_name(transport_trace)),
     'capability={capability}'.format(
       capability=transport_trace.command_plan.capability.value,
     ),
@@ -619,6 +631,8 @@ def render_transport_transcript_text(
     '',
     '[progress_markers]',
   ]
+  if _transport_trace_adapter_name(transport_trace) != 'heimdall':
+    lines.insert(5, 'delegated_lower_transport=heimdall')
   if transport_trace.progress_markers:
     lines.extend(transport_trace.progress_markers)
   else:
@@ -898,6 +912,7 @@ def _build_live_path_identity_evidence(
 def _build_flash_plan_evidence(
   package_assessment: Optional[PackageManifestAssessment],
   reviewed_flash_plan: Optional[ReviewedFlashPlan],
+  transport_backend: str = 'heimdall',
 ) -> FlashPlanEvidence:
   if reviewed_flash_plan is None or package_assessment is None:
     return FlashPlanEvidence(
@@ -908,7 +923,7 @@ def _build_flash_plan_evidence(
       package_id='awaiting-package',
       snapshot_id=None,
       ready_for_transport=False,
-      transport_backend='heimdall',
+      transport_backend=transport_backend,
       risk_level='unclassified',
       reboot_policy='unspecified',
       repartition_allowed=False,
@@ -955,20 +970,21 @@ def _build_flash_plan_evidence(
 def _build_transport_evidence(
   session: PlatformSession,
   transport_trace: Optional[HeimdallNormalizedTrace],
+  transport_backend: str = 'heimdall',
 ) -> TransportEvidence:
   if transport_trace is None:
     return TransportEvidence(
-      adapter_name='heimdall',
+      adapter_name=transport_backend,
       capability='reserved',
       command_display='not_invoked',
       state=_fallback_transport_state(session).value,
-      summary='Transport remains behind the Heimdall adapter boundary until the shell invokes a normalized backend trace.',
+      summary=_transport_not_invoked_summary(transport_backend),
       exit_code=None,
       normalized_event_count=0,
     )
 
   return TransportEvidence(
-    adapter_name='heimdall',
+    adapter_name=_transport_trace_adapter_name(transport_trace),
     capability=transport_trace.command_plan.capability.value,
     command_display=transport_trace.command_plan.display_command,
     state=transport_trace.state.value,
@@ -997,7 +1013,7 @@ def _build_transcript_evidence(
   return TranscriptEvidence(
     policy='preserve_bounded_transport_transcript',
     preserved=True,
-    summary='Bounded Heimdall transport output is preserved as an external transcript artifact when evidence is written to disk.',
+    summary='Bounded transport output is preserved as an external transcript artifact when evidence is written to disk.',
     line_count=stdout_count + stderr_count,
     stdout_line_count=stdout_count,
     stderr_line_count=stderr_count,
@@ -1443,7 +1459,7 @@ def _build_decision_trace(
     trace.append(
       DecisionTraceEntry(
         source='transport',
-        label='Heimdall adapter',
+        label=_transport_decision_label(transport_trace),
         summary=transport_trace.summary,
         severity=_transport_severity(transport_trace.state),
       )
@@ -1679,9 +1695,7 @@ def _build_log_lines(
       )
     )
     if transport_trace.command_plan.capability.value == 'flash_package':
-      lines.append(
-        '[SAFE-PATH] governance=platform_supervised lane=bounded_reviewed_flash_session lower_transport=heimdall'.format()
-      )
+      lines.append(_safe_path_log_line(transport_trace))
     lines.append('[COMMAND] {command}'.format(
       command=transport_trace.command_plan.display_command,
     ))
@@ -1722,7 +1736,7 @@ def _build_log_lines(
         summary=trace.summary,
       )
     )
-  lines.append('[SHELL] GUI lane remains fixture-first and adapter-late.')
+  lines.append('[SHELL] GUI lane remains fixture-first and transport-aware.')
   return tuple(lines)
 
 
@@ -1760,6 +1774,54 @@ def _transport_severity(state: HeimdallTraceState) -> str:
   if state == HeimdallTraceState.COMPLETED:
     return 'success'
   return 'info'
+
+
+def _transport_trace_adapter_name(
+  transport_trace: HeimdallNormalizedTrace,
+) -> str:
+  """Return the operator-visible adapter/runtime name for one trace."""
+
+  return getattr(transport_trace, 'adapter_name', 'heimdall')
+
+
+def _transport_not_invoked_summary(transport_backend: str) -> str:
+  """Return the staged transport summary for a not-yet-invoked lane."""
+
+  if transport_backend == 'integrated-runtime':
+    return (
+      'Transport remains behind the Calamum integrated-runtime boundary '
+      'until the shell invokes a normalized supported-path trace.'
+    )
+  return (
+    'Transport remains behind the Heimdall adapter boundary until the shell '
+    'invokes a normalized backend trace.'
+  )
+
+
+def _transport_decision_label(
+  transport_trace: HeimdallNormalizedTrace,
+) -> str:
+  """Return the decision-trace label for one transport surface."""
+
+  if _transport_trace_adapter_name(transport_trace) == 'integrated-runtime':
+    return 'Integrated runtime'
+  return 'Heimdall adapter'
+
+
+def _safe_path_log_line(transport_trace: HeimdallNormalizedTrace) -> str:
+  """Return the transport log line for the supported safe-path lane."""
+
+  adapter_name = _transport_trace_adapter_name(transport_trace)
+  if adapter_name == 'integrated-runtime':
+    return (
+      '[SAFE-PATH] governance=platform_supervised '
+      'lane=bounded_reviewed_flash_session transport=integrated-runtime '
+      'delegated_lower_transport=heimdall'
+    )
+  return (
+    '[SAFE-PATH] governance=platform_supervised '
+    'lane=bounded_reviewed_flash_session lower_transport=heimdall'
+  )
 
 
 def _authority_severity(authority: SessionAuthorityEvidence) -> str:

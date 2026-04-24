@@ -10,6 +10,7 @@ from typing import Tuple
 
 from calamum_vulcan.domain.device_registry import DeviceRegistryMatchKind
 from calamum_vulcan.domain.device_registry import resolve_device_profile
+from calamum_vulcan.domain.live_device.model import LiveDeviceSource
 from calamum_vulcan.domain.state.model import PlatformSession
 from calamum_vulcan.domain.state.model import SessionPhase
 
@@ -94,6 +95,8 @@ class PreflightInput:
   pit_package_alignment: Optional[str] = None
   pit_device_alignment: Optional[str] = None
   pit_observed_product_code: Optional[str] = None
+  device_identity_review_deferred: bool = False
+  package_review_deferred: bool = False
 
   @classmethod
   def from_session(
@@ -200,11 +203,106 @@ def preflight_input_from_review_context(
 ) -> 'PreflightInput':
   """Build one preflight input snapshot from reviewed package and PIT truth."""
 
+  overrides = preflight_overrides_from_review_context(
+    package_assessment=package_assessment,
+    pit_inspection=pit_inspection,
+    pit_required=pit_required,
+  )
+  effective_product_code = _effective_review_product_code(session, overrides)
+  if effective_product_code is None:
+    pit_product_code = _pit_review_product_code(pit_inspection)
+    if pit_product_code is not None:
+      resolution = resolve_device_profile(pit_product_code)
+      overrides.update(
+        {
+          'product_code': pit_product_code,
+          'device_registry_known': resolution.known,
+          'device_registry_match_kind': resolution.match_kind,
+          'canonical_product_code': resolution.canonical_product_code,
+          'device_marketing_name': resolution.marketing_name,
+        }
+      )
+      effective_product_code = pit_product_code
+  if _download_mode_review_active(session) and not _pit_capture_complete_for_package_stage(
+    pit_inspection
+  ):
+    if effective_product_code is None:
+      overrides['device_identity_review_deferred'] = True
+    if package_assessment is None and not session.guards.package_loaded:
+      overrides['package_review_deferred'] = True
   return PreflightInput.from_session(
     session,
-    **preflight_overrides_from_review_context(
-      package_assessment=package_assessment,
-      pit_inspection=pit_inspection,
-      pit_required=pit_required,
-    )
+    **overrides
   )
+
+
+def _download_mode_review_active(session: PlatformSession) -> bool:
+  """Return whether the current review lane is actively pinned on download mode."""
+
+  snapshot = session.live_detection.snapshot
+  if snapshot is not None:
+    return bool(
+      snapshot.source in (
+        LiveDeviceSource.USB,
+        LiveDeviceSource.HEIMDALL,
+      )
+      and snapshot.command_ready
+    )
+  return bool(
+    session.guards.has_device and (session.mode or '').strip().lower() == 'download'
+  )
+
+
+def _pit_capture_complete_for_package_stage(
+  pit_inspection: Optional[object],
+) -> bool:
+  """Return whether PIT truth is complete enough to unlock package staging."""
+
+  if pit_inspection is None:
+    return False
+  pit_state = _enum_value(getattr(pit_inspection, 'state', None))
+  pit_device_alignment = _enum_value(
+    getattr(pit_inspection, 'device_alignment', None)
+  )
+  return pit_state == 'captured' and pit_device_alignment != 'not_provided'
+
+
+def _pit_review_product_code(pit_inspection: Optional[object]) -> Optional[str]:
+  """Return the strongest product-code truth currently available from PIT review."""
+
+  if pit_inspection is None:
+    return None
+  return _normalized_string(
+    getattr(pit_inspection, 'canonical_product_code', None)
+    or getattr(pit_inspection, 'observed_product_code', None)
+  )
+
+
+def _effective_review_product_code(
+  session: PlatformSession,
+  overrides: Dict[str, object],
+) -> Optional[str]:
+  """Return the best current reviewed product code from session or overrides."""
+
+  return _normalized_string(overrides.get('product_code')) or _normalized_string(
+    session.product_code
+  )
+
+
+def _normalized_string(value: object) -> Optional[str]:
+  """Return one stripped string value or None."""
+
+  if value is None:
+    return None
+  normalized = str(value).strip()
+  if not normalized:
+    return None
+  return normalized
+
+
+def _enum_value(value: object) -> Optional[str]:
+  """Return the string value of one enum-like object."""
+
+  if value is None:
+    return None
+  return str(getattr(value, 'value', value))

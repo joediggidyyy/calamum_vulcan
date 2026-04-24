@@ -16,6 +16,7 @@ if str(FINAL_EXAM_ROOT) not in sys.path:
 
 from calamum_vulcan.app.demo import build_demo_package_assessment
 from calamum_vulcan.app.demo import build_demo_adapter_session
+from calamum_vulcan.app.demo import build_demo_integrated_runtime_session
 from calamum_vulcan.app.demo import build_demo_pit_inspection
 from calamum_vulcan.app.demo import build_demo_session
 from calamum_vulcan.app.demo import scenario_label
@@ -380,6 +381,34 @@ class ReportingContractTests(unittest.TestCase):
     self.assertTrue(
       any(
         '[SAFE-PATH] governance=platform_supervised' in line
+        for line in payload['log_lines']
+      )
+    )
+
+  def test_integrated_runtime_report_carries_supported_path_transport_trace(self) -> None:
+    session, package_assessment, transport_trace = build_demo_integrated_runtime_session('happy')
+    pit_inspection = build_demo_pit_inspection(
+      'happy',
+      session=build_demo_session('happy'),
+      package_assessment=package_assessment,
+      transport_backend='integrated-runtime',
+    )
+    report = build_session_evidence_report(
+      session,
+      scenario_name='Integrated runtime happy path',
+      package_assessment=package_assessment,
+      pit_inspection=pit_inspection,
+      transport_trace=transport_trace,
+      transport_backend='integrated-runtime',
+      captured_at_utc='2026-04-18T20:27:30Z',
+    )
+
+    payload = json.loads(serialize_session_evidence_json(report))
+    self.assertEqual(payload['transport']['adapter_name'], 'integrated-runtime')
+    self.assertIn('integrated-runtime flash', payload['transport']['command_display'])
+    self.assertTrue(
+      any(
+        'transport=integrated-runtime' in line
         for line in payload['log_lines']
       )
     )

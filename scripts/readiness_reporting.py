@@ -109,6 +109,9 @@ def render_readiness_aggregate_report(
     '- overall readiness contract: **`{status}`**'.format(
       status=summary.get('overall_status', 'unknown'),
     ),
+    '- ready for live empirical: **`{status}`**'.format(
+      status=summary.get('ready_for_live_empirical', 'unknown'),
+    ),
     '- include TestPyPI rehearsal: `{value}`'.format(
       value=summary.get('include_testpypi_rehearsal', False),
     ),

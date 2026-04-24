@@ -17,6 +17,8 @@ PIT_SCHEMA_VERSION = '0.3.0-fs3-04'
 class PitSource(str, Enum):
   """Supported PIT acquisition sources for the current read-side slice."""
 
+  INTEGRATED_RUNTIME_PRINT_PIT = 'integrated_runtime_print_pit'
+  INTEGRATED_RUNTIME_DOWNLOAD_PIT = 'integrated_runtime_download_pit'
   HEIMDALL_PRINT_PIT = 'heimdall_print_pit'
   HEIMDALL_DOWNLOAD_PIT = 'heimdall_download_pit'
 

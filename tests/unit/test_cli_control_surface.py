@@ -38,6 +38,7 @@ from calamum_vulcan.app.__main__ import _render_codesentinel_status_block
 from calamum_vulcan.domain.live_device import LiveFallbackPosture
 from calamum_vulcan.domain.live_device import apply_live_device_info_trace
 from calamum_vulcan.domain.live_device import build_live_detection_session
+from calamum_vulcan.domain.state.integrated_runtime import project_heimdall_trace_to_integrated_runtime
 from calamum_vulcan.fixtures import load_heimdall_pit_fixture
 from calamum_vulcan.usb import USBDeviceDescriptor
 from calamum_vulcan.usb import USBProbeResult
@@ -67,6 +68,10 @@ def _ready_print_pit_trace():
     build_print_pit_command_plan(),
     load_heimdall_pit_fixture('pit-print-ready-g991u'),
   )
+
+
+def _ready_integrated_print_pit_trace():
+  return project_heimdall_trace_to_integrated_runtime(_ready_print_pit_trace())
 
 
 def _no_device_adb_detection_trace():
@@ -305,20 +310,20 @@ class CliControlSurfaceTests(unittest.TestCase):
         _ready_adb_info_trace(),
       ),
     ) as mocked_android, patch(
-      'calamum_vulcan.app.__main__.execute_heimdall_command',
-      return_value=_ready_print_pit_trace(),
-    ) as mocked_heimdall:
+      'calamum_vulcan.app.__main__.execute_integrated_command',
+      return_value=_ready_integrated_print_pit_trace(),
+    ) as mocked_runtime:
       with redirect_stdout(stream):
         exit_code = main(['--inspect-device'])
 
     output = stream.getvalue()
     self.assertEqual(exit_code, 0)
     self.assertEqual(mocked_android.call_count, 2)
-    mocked_heimdall.assert_called_once()
+    mocked_runtime.assert_called_once()
     self.assertIn('inspection_result posture="ready"', output)
     self.assertIn('write_ready="no"', output)
     self.assertIn('inspection_boundary=', output)
-    self.assertIn('inspection_pit state="captured"', output)
+    self.assertIn('inspection_pit state="captured" source="integrated_runtime_print_pit"', output)
 
   def test_inspect_device_can_fall_through_to_native_usb_download_mode_detection(self) -> None:
     stream = io.StringIO()
@@ -333,9 +338,9 @@ class CliControlSurfaceTests(unittest.TestCase):
       'calamum_vulcan.app.__main__.VulcanUSBScanner.probe_download_mode_devices',
       return_value=_ready_usb_probe_result(),
     ) as mocked_usb, patch(
-      'calamum_vulcan.app.__main__.execute_heimdall_command',
-      return_value=_ready_print_pit_trace(),
-    ) as mocked_heimdall:
+      'calamum_vulcan.app.__main__.execute_integrated_command',
+      return_value=_ready_integrated_print_pit_trace(),
+    ) as mocked_runtime:
       with redirect_stdout(stream):
         exit_code = main(['--inspect-device'])
 
@@ -343,10 +348,10 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertEqual(exit_code, 0)
     self.assertEqual(mocked_android.call_count, 2)
     mocked_usb.assert_called_once()
-    mocked_heimdall.assert_called_once()
+    mocked_runtime.assert_called_once()
     self.assertIn('inspection_live state="detected" source="usb"', output)
     self.assertIn('inspection_live state="detected" source="usb" info_state="unavailable"', output)
-    self.assertIn('inspection_pit state="captured"', output)
+    self.assertIn('inspection_pit state="captured" source="integrated_runtime_print_pit"', output)
     self.assertIn('SM-G991U', output)
 
   def test_inspect_device_preserves_native_usb_attention_state(self) -> None:
@@ -362,9 +367,9 @@ class CliControlSurfaceTests(unittest.TestCase):
       'calamum_vulcan.app.__main__.VulcanUSBScanner.probe_download_mode_devices',
       return_value=_attention_usb_probe_result(),
     ) as mocked_usb, patch(
-      'calamum_vulcan.app.__main__.execute_heimdall_command',
-      return_value=_ready_print_pit_trace(),
-    ) as mocked_heimdall:
+      'calamum_vulcan.app.__main__.execute_integrated_command',
+      return_value=_ready_integrated_print_pit_trace(),
+    ) as mocked_runtime:
       with redirect_stdout(stream):
         exit_code = main(['--inspect-device'])
 
@@ -372,9 +377,9 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertEqual(exit_code, 0)
     self.assertEqual(mocked_android.call_count, 2)
     mocked_usb.assert_called_once()
-    mocked_heimdall.assert_called_once()
+    mocked_runtime.assert_called_once()
     self.assertIn('inspection_live state="attention" source="usb"', output)
-    self.assertIn('inspection_pit state="captured"', output)
+    self.assertIn('inspection_pit state="captured" source="integrated_runtime_print_pit"', output)
 
   def test_inspect_device_surfaces_native_usb_failure_honestly(self) -> None:
     stream = io.StringIO()
@@ -389,9 +394,9 @@ class CliControlSurfaceTests(unittest.TestCase):
       'calamum_vulcan.app.__main__.VulcanUSBScanner.probe_download_mode_devices',
       return_value=_failed_usb_probe_result(),
     ) as mocked_usb, patch(
-      'calamum_vulcan.app.__main__.execute_heimdall_command',
-      return_value=_ready_print_pit_trace(),
-    ) as mocked_heimdall:
+      'calamum_vulcan.app.__main__.execute_integrated_command',
+      return_value=_ready_integrated_print_pit_trace(),
+    ) as mocked_runtime:
       with redirect_stdout(stream):
         exit_code = main(['--inspect-device'])
 
@@ -399,9 +404,9 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertEqual(exit_code, 0)
     self.assertEqual(mocked_android.call_count, 2)
     mocked_usb.assert_called_once()
-    mocked_heimdall.assert_called_once()
+    mocked_runtime.assert_called_once()
     self.assertIn('inspection_live state="failed" source="usb"', output)
-    self.assertIn('inspection_pit state="captured"', output)
+    self.assertIn('inspection_pit state="captured" source="integrated_runtime_print_pit"', output)
 
   def test_inspect_device_can_export_json_evidence_with_inspection_block(self) -> None:
     stream = io.StringIO()
@@ -428,8 +433,8 @@ class CliControlSurfaceTests(unittest.TestCase):
           _ready_adb_info_trace(),
         ),
       ), patch(
-        'calamum_vulcan.app.__main__.execute_heimdall_command',
-        return_value=_ready_print_pit_trace(),
+        'calamum_vulcan.app.__main__.execute_integrated_command',
+        return_value=_ready_integrated_print_pit_trace(),
       ):
         with redirect_stdout(stream):
           exit_code = main(
@@ -457,7 +462,7 @@ class CliControlSurfaceTests(unittest.TestCase):
       exit_code = main(
         [
           '--execute-flash-plan',
-          '--transport-source', 'heimdall-adapter',
+          '--transport-source', 'integrated-runtime',
           '--scenario', 'ready',
         ]
       )
@@ -468,7 +473,7 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertIn('ownership="delegated"', output)
     self.assertIn('transport_state="completed"', output)
     self.assertIn('safe_path_boundary=', output)
-    self.assertIn('safe_path_command="heimdall flash', output)
+    self.assertIn('safe_path_command="integrated-runtime flash', output)
 
   def test_execute_flash_plan_reports_blocked_lane_without_transport(self) -> None:
     stream = io.StringIO()
@@ -477,7 +482,7 @@ class CliControlSurfaceTests(unittest.TestCase):
       exit_code = main(
         [
           '--execute-flash-plan',
-          '--transport-source', 'heimdall-adapter',
+          '--transport-source', 'integrated-runtime',
           '--scenario', 'blocked',
         ]
       )
@@ -492,13 +497,16 @@ class CliControlSurfaceTests(unittest.TestCase):
     with self.assertRaises(SystemExit) as exit_signal:
       main(['--execute-flash-plan'])
 
-    self.assertIn('requires --transport-source heimdall-adapter', str(exit_signal.exception))
+    self.assertIn('requires --transport-source integrated-runtime', str(exit_signal.exception))
 
-  def test_reserved_integrated_runtime_transport_source_is_rejected_honestly(self) -> None:
-    with self.assertRaises(SystemExit) as exit_signal:
-      main(['--transport-source', 'integrated-runtime', '--describe-only'])
+  def test_integrated_runtime_transport_source_is_available_for_describe_only_shell(self) -> None:
+    stream = io.StringIO()
 
-    self.assertIn('reserved for the Calamum-owned runtime', str(exit_signal.exception))
+    with redirect_stdout(stream):
+      exit_code = main(['--transport-source', 'integrated-runtime', '--describe-only'])
+
+    self.assertEqual(exit_code, 0)
+    self.assertIn('scenario=', stream.getvalue())
 
   def test_execute_flash_plan_can_render_json_result(self) -> None:
     stream = io.StringIO()
@@ -507,7 +515,7 @@ class CliControlSurfaceTests(unittest.TestCase):
       exit_code = main(
         [
           '--execute-flash-plan',
-          '--transport-source', 'heimdall-adapter',
+          '--transport-source', 'integrated-runtime',
           '--scenario', 'ready',
           '--control-format', 'json',
         ]
@@ -518,6 +526,7 @@ class CliControlSurfaceTests(unittest.TestCase):
     self.assertTrue(payload['execution_allowed'])
     self.assertEqual(payload['authority']['ownership'], 'delegated')
     self.assertEqual(payload['transport']['state'], 'completed')
+    self.assertEqual(payload['transport']['adapter_name'], 'integrated-runtime')
 
   def test_read_side_close_bundle_serializes_from_cli(self) -> None:
     stream = io.StringIO()
@@ -572,6 +581,83 @@ class CliControlSurfaceTests(unittest.TestCase):
       dict(scenario_map['safe-path-runtime-complete']['action_states'])['Export evidence'],
       'next',
     )
+
+  def test_autonomy_close_bundle_serializes_from_cli(self) -> None:
+    stream = io.StringIO()
+
+    with redirect_stdout(stream):
+      exit_code = main(
+        [
+          '--integration-suite', 'autonomy-close',
+          '--suite-format', 'json',
+          '--captured-at-utc', '2026-04-23T23:20:00Z',
+        ]
+      )
+
+    payload = json.loads(stream.getvalue())
+    scenario_map = {scenario['scenario_id']: scenario for scenario in payload['scenarios']}
+
+    self.assertEqual(exit_code, 0)
+    self.assertEqual(payload['suite_name'], 'autonomy-close')
+    self.assertEqual(payload['release_version'], '0.6.0')
+    self.assertEqual(
+      scenario_map['supported-path-ready-review']['transport_source'],
+      'integrated-runtime',
+    )
+    self.assertEqual(
+      scenario_map['supported-path-ready-review']['pit_source'],
+      'integrated_runtime_print_pit',
+    )
+    self.assertEqual(
+      dict(scenario_map['supported-path-ready-review']['action_states'])['Execute flash plan'],
+      'next',
+    )
+    self.assertEqual(
+      scenario_map['integrated-runtime-complete']['transport_state'],
+      'completed',
+    )
+    self.assertEqual(
+      scenario_map['integrated-runtime-failure-review']['transport_state'],
+      'failed',
+    )
+    self.assertEqual(
+      scenario_map['fastboot-fallback-boundary-review']['live_source'],
+      'fastboot',
+    )
+
+  def test_failure_evidence_export_preserves_integrated_runtime_transcript(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      evidence_path = Path(temp_dir) / 'failure_evidence.json'
+      stream = io.StringIO()
+
+      with redirect_stdout(stream):
+        exit_code = main(
+          [
+            '--scenario', 'failure',
+            '--transport-source', 'integrated-runtime',
+            '--describe-only',
+            '--export-evidence',
+            '--evidence-format', 'json',
+            '--evidence-output', str(evidence_path),
+          ]
+        )
+
+      payload = json.loads(evidence_path.read_text(encoding='utf-8'))
+      transcript_name = payload['transcript']['reference_file_name']
+
+      self.assertEqual(exit_code, 0)
+      self.assertTrue(payload['transcript']['preserved'])
+      self.assertEqual(
+        payload['transcript']['policy'],
+        'preserve_bounded_transport_transcript',
+      )
+      self.assertTrue(transcript_name)
+      transcript_path = evidence_path.parent / transcript_name
+      self.assertTrue(transcript_path.exists())
+      self.assertIn(
+        'USB transfer timeout during partition write',
+        transcript_path.read_text(encoding='utf-8'),
+      )
 
   def test_gui_main_survives_missing_console_streams(self) -> None:
     with tempfile.TemporaryDirectory() as temp_dir:

@@ -137,6 +137,12 @@ class LiveDeviceContractTests(unittest.TestCase):
       'Native Download-Mode Attention',
     )
     self.assertIn('operator attention', detection.summary.lower())
+    self.assertTrue(
+      any(
+        'Confirm the USB access path' in note
+        for note in detection.notes
+      )
+    )
 
   def test_native_usb_probe_failure_stays_explicit(self) -> None:
     probe_result = USBProbeResult(
@@ -161,6 +167,15 @@ class LiveDeviceContractTests(unittest.TestCase):
       'Native Download-Mode Probe Failed',
     )
     self.assertIn('failed before a trustworthy samsung download-mode identity', detection.summary.lower())
+    self.assertTrue(
+      any(note.startswith('Self-heal attempted:') for note in detection.notes)
+    )
+    self.assertTrue(
+      any(
+        'Allow the packaged USB remediation helper to finish' in note
+        for note in detection.notes
+      )
+    )
 
   def test_heimdall_detect_trace_builds_supported_download_mode_snapshot(self) -> None:
     trace = normalize_heimdall_result(

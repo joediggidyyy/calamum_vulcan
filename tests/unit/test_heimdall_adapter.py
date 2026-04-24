@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -115,6 +116,29 @@ class HeimdallAdapterTests(unittest.TestCase):
       heimdall_runtime.PROCESS_TIMEOUT_SECONDS,
     )
 
+  def test_runtime_prefers_packaged_windows_heimdall_asset_when_available(self) -> None:
+    candidate = heimdall_runtime.WINDOWS_PACKAGED_HEIMDALL_EXECUTABLE
+
+    with mock.patch.object(heimdall_runtime.shutil, 'which', return_value=None):
+      with mock.patch.object(heimdall_runtime, 'os') as mocked_os:
+        mocked_os.name = 'nt'
+        mocked_os.getenv.side_effect = lambda key: {
+          'HEIMDALL_PATH': None,
+          'HEIMDALL_HOME': None,
+          'ChocolateyInstall': None,
+          'ProgramData': None,
+          'SCOOP': None,
+          'USERPROFILE': None,
+          'ProgramFiles': None,
+          'ProgramFiles(x86)': None,
+          'LOCALAPPDATA': None,
+        }.get(key)
+        with mock.patch.object(heimdall_runtime.Path, 'exists', autospec=True) as mocked_exists:
+          mocked_exists.side_effect = lambda path: str(path) == str(candidate)
+          resolved = heimdall_runtime._resolve_executable('heimdall')
+
+    self.assertEqual(resolved, str(candidate))
+
   def test_runtime_resolves_common_windows_chocolatey_heimdall_path(self) -> None:
     candidate = Path('C:/ProgramData/chocolatey/bin/heimdall.exe')
 
@@ -137,6 +161,27 @@ class HeimdallAdapterTests(unittest.TestCase):
           resolved = heimdall_runtime._resolve_executable('heimdall')
 
     self.assertEqual(resolved, str(candidate))
+
+  def test_runtime_reports_missing_dll_guidance_for_packaged_asset(self) -> None:
+    command_plan = build_print_pit_command_plan()
+
+    with mock.patch.object(
+      heimdall_runtime,
+      '_resolve_executable',
+      return_value=str(heimdall_runtime.WINDOWS_PACKAGED_HEIMDALL_EXECUTABLE),
+    ):
+      with mock.patch.object(
+        heimdall_runtime.subprocess,
+        'run',
+        return_value=mock.Mock(returncode=3221225781, stdout='', stderr=''),
+      ):
+        result = heimdall_runtime._run_process(command_plan, 'live-process')
+
+    self.assertEqual(result.exit_code, 3221225781)
+    self.assertTrue(any('0xC0000135' in line for line in result.stderr_lines))
+    self.assertTrue(
+      any('Microsoft Visual C++ 2012 x86 runtime' in line for line in result.stderr_lines)
+    )
 
   def test_flash_plan_respects_no_reboot_package_posture(self) -> None:
     base_session = build_demo_session('happy')
@@ -280,6 +325,60 @@ class HeimdallAdapterTests(unittest.TestCase):
     self.assertEqual(command_plan.arguments[0], 'download-pit')
     self.assertIn('--output', command_plan.arguments)
     self.assertIn('artifacts', command_plan.display_command)
+
+  def test_download_pit_runtime_creates_output_parent_before_process(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      output_path = Path(temp_dir) / 'nested' / 'device.pit'
+      command_plan = build_download_pit_command_plan(output_path=str(output_path))
+
+      def _fake_run(*args, **kwargs):
+        self.assertTrue(output_path.parent.exists())
+        return mock.Mock(returncode=0, stdout='', stderr='')
+
+      with mock.patch.object(
+        heimdall_runtime,
+        '_resolve_executable',
+        return_value='heimdall',
+      ):
+        with mock.patch.object(
+          heimdall_runtime.subprocess,
+          'run',
+          side_effect=_fake_run,
+        ):
+          heimdall_runtime.execute_heimdall_command(command_plan)
+
+      self.assertTrue(output_path.parent.exists())
+
+  def test_download_pit_runtime_absolutizes_relative_output_path_before_packaged_subprocess(self) -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+      temp_root = Path(temp_dir)
+      executable_path = temp_root / 'packaged' / 'heimdall.exe'
+      executable_path.parent.mkdir(parents=True, exist_ok=True)
+      executable_path.write_text('', encoding='utf-8')
+      command_plan = build_download_pit_command_plan(output_path='artifacts/device.pit')
+
+      def _fake_run(command, **kwargs):
+        self.assertEqual(Path(kwargs['cwd']), executable_path.parent)
+        output_path = Path(command[command.index('--output') + 1])
+        self.assertTrue(output_path.is_absolute())
+        self.assertEqual(output_path, temp_root / 'artifacts' / 'device.pit')
+        self.assertTrue(output_path.parent.exists())
+        return mock.Mock(returncode=0, stdout='', stderr='')
+
+      with mock.patch.object(heimdall_runtime.Path, 'cwd', return_value=temp_root):
+        with mock.patch.object(
+          heimdall_runtime,
+          '_resolve_executable',
+          return_value=str(executable_path),
+        ):
+          with mock.patch.object(
+            heimdall_runtime.subprocess,
+            'run',
+            side_effect=_fake_run,
+          ):
+            heimdall_runtime.execute_heimdall_command(command_plan)
+
+      self.assertTrue((temp_root / 'artifacts').exists())
 
   def test_print_pit_plan_remains_bounded_and_explicit(self) -> None:
     command_plan = build_print_pit_command_plan()

@@ -84,7 +84,7 @@ SCENARIO_MATRIX = (
     'name': 'failure',
     'cli_args': (
       '--scenario', 'failure',
-      '--transport-source', 'heimdall-adapter',
+      '--transport-source', 'integrated-runtime',
       '--describe-only',
     ),
     'expected_summary': 'phase="Failed" gate="Gate Ready"',
@@ -100,7 +100,7 @@ SCENARIO_MATRIX = (
     'name': 'resume',
     'cli_args': (
       '--scenario', 'resume',
-      '--transport-source', 'heimdall-adapter',
+      '--transport-source', 'integrated-runtime',
       '--describe-only',
     ),
     'expected_summary': 'phase="Completed" gate="Gate Ready"',
@@ -119,7 +119,7 @@ EXECUTE_MATRIX = (
     'name': 'ready-execute',
     'cli_args': (
       '--execute-flash-plan',
-      '--transport-source', 'heimdall-adapter',
+      '--transport-source', 'integrated-runtime',
       '--scenario', 'ready',
       '--control-format', 'json',
     ),
@@ -138,7 +138,7 @@ EXECUTE_MATRIX = (
     'name': 'blocked-execute',
     'cli_args': (
       '--execute-flash-plan',
-      '--transport-source', 'heimdall-adapter',
+      '--transport-source', 'integrated-runtime',
       '--scenario', 'blocked',
       '--control-format', 'json',
     ),
@@ -425,6 +425,13 @@ def _run_bundle_context(
       'heading': 'Calamum Vulcan FS4-07 safe-path-close bundle',
       'scenario_count': 6,
     },
+    {
+      'suite_name': 'autonomy-close',
+      'json_path': context_root / 'autonomy_close_bundle.json',
+      'markdown_path': context_root / 'autonomy_close_bundle.md',
+      'heading': 'Calamum Vulcan FS6-05 autonomy-close bundle',
+      'scenario_count': 7,
+    },
   )
   results = {}
 
@@ -472,6 +479,30 @@ def _run_bundle_context(
           suite_name=bundle_spec['suite_name'],
         )
       )
+    if bundle_spec['suite_name'] == 'autonomy-close':
+      scenario_map = {
+        scenario['scenario_id']: scenario for scenario in bundle_json['scenarios']
+      }
+      if scenario_map['supported-path-ready-review']['transport_source'] != 'integrated-runtime':
+        raise SystemExit(
+          'Autonomy-close bundle did not preserve the integrated-runtime supported-path review label.'
+        )
+      if scenario_map['supported-path-ready-review']['pit_source'] != 'integrated_runtime_print_pit':
+        raise SystemExit(
+          'Autonomy-close bundle did not preserve integrated-runtime PIT sourcing for the supported-path review.'
+        )
+      if scenario_map['integrated-runtime-complete']['transport_state'] != 'completed':
+        raise SystemExit(
+          'Autonomy-close bundle did not preserve the completed integrated-runtime proof lane.'
+        )
+      if scenario_map['integrated-runtime-failure-review']['transport_state'] != 'failed':
+        raise SystemExit(
+          'Autonomy-close bundle did not preserve the failed integrated-runtime proof lane.'
+        )
+      if scenario_map['fastboot-fallback-boundary-review']['live_source'] != 'fastboot':
+        raise SystemExit(
+          'Autonomy-close bundle did not preserve the explicit fallback boundary review lane.'
+        )
     results[bundle_spec['suite_name']] = {
       'json': bundle_json,
       'markdown': bundle_markdown,

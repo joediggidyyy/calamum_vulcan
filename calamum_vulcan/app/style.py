@@ -123,18 +123,30 @@ def brand_frame_style(selector: str = 'brand-mark', scale: float = 1.0) -> str:
 def action_button_style(emphasis: str, enabled: bool, scale: float = 1.0) -> str:
   """Return the stylesheet string for a control-deck button."""
 
+  text = COLOR_TOKENS['text'] if enabled else COLOR_TOKENS['muted']
   if emphasis == 'danger':
     accent = COLOR_TOKENS['danger']
   elif emphasis == 'warning':
     accent = COLOR_TOKENS['warning']
   elif emphasis == 'primary':
     accent = COLOR_TOKENS['info']
+  elif emphasis == 'next':
+    accent = COLOR_TOKENS['success']
+    if enabled:
+      text = COLOR_TOKENS['success']
+  elif emphasis == 'next_warning':
+    accent = COLOR_TOKENS['warning']
+    if enabled:
+      text = COLOR_TOKENS['success']
+  elif emphasis == 'next_danger':
+    accent = COLOR_TOKENS['danger']
+    if enabled:
+      text = COLOR_TOKENS['success']
   else:
     accent = COLOR_TOKENS['line']
 
   background = COLOR_TOKENS['surface_alt']
   hover_background = COLOR_TOKENS['surface_card']
-  text = COLOR_TOKENS['text'] if enabled else COLOR_TOKENS['muted']
   if not enabled:
     accent = COLOR_TOKENS['line']
 

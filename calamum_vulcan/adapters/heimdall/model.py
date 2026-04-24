@@ -75,3 +75,4 @@ class HeimdallNormalizedTrace:
   notes: Tuple[str, ...] = ()
   stdout_lines: Tuple[str, ...] = ()
   stderr_lines: Tuple[str, ...] = ()
+  adapter_name: str = 'heimdall'

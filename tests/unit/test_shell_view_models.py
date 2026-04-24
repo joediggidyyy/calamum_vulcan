@@ -33,7 +33,9 @@ from calamum_vulcan.app.view_models import describe_shell
 from calamum_vulcan.domain.live_device import LiveFallbackPosture
 from calamum_vulcan.domain.live_device import apply_live_device_info_trace
 from calamum_vulcan.domain.live_device import build_live_detection_session
+from calamum_vulcan.domain.live_device import build_usb_live_detection_session
 from calamum_vulcan.domain.pit import PitDeviceAlignment
+from calamum_vulcan.domain.pit import PitInspectionState
 from calamum_vulcan.domain.pit import PitPackageAlignment
 from calamum_vulcan.domain.preflight import PreflightGate
 from calamum_vulcan.domain.preflight import PreflightInput
@@ -45,6 +47,8 @@ from calamum_vulcan.domain.state import build_inspection_workflow
 from calamum_vulcan.domain.state import replay_events
 from calamum_vulcan.fixtures import happy_path_events
 from calamum_vulcan.fixtures import package_first_events
+from calamum_vulcan.usb import USBDeviceDescriptor
+from calamum_vulcan.usb import USBProbeResult
 
 
 def _actions_by_label(model):
@@ -74,10 +78,13 @@ class ShellViewModelTests(unittest.TestCase):
       scenario_name=scenario_label('blocked'),
       package_assessment=package_assessment,
     )
+    pill_map = {pill.label: pill for pill in model.status_pills}
 
     self.assertEqual(tuple(panel.title for panel in model.panels), PANEL_TITLES)
     self.assertEqual(model.phase_label, 'Validation Blocked')
     self.assertEqual(model.gate_label, 'Gate Blocked')
+    self.assertEqual(pill_map['Gate'].value, 'Blocked')
+    self.assertIn('Gate Blocked', pill_map['Gate'].tooltip or '')
     self.assertEqual(
       model.session_authority.selected_launch_path,
       SessionLaunchPath.BLOCKED,
@@ -217,9 +224,23 @@ class ShellViewModelTests(unittest.TestCase):
       model.session_authority.live_phase_label,
       'Download-Mode Device Detected',
     )
+    self.assertEqual(
+      model.session_authority.reviewed_target_label,
+      'Download-Mode Target Detected',
+    )
     self.assertEqual(pill_map['Phase'].value, 'Download-Mode Device Detected')
     self.assertEqual(pill_map['Device'].value, 'SM-G991U via HEIMDALL')
     self.assertIn('via HEIMDALL', model.panels[0].summary)
+    self.assertIn(
+      'reviewed target posture is now Download-Mode Target Detected',
+      model.panels[0].summary,
+    )
+    self.assertTrue(
+      any(
+        'Reviewed target posture: Download-Mode Target Detected' in line
+        for line in model.panels[0].detail_lines
+      )
+    )
     self.assertTrue(
       any(
         'Live companion backend: HEIMDALL' in line
@@ -378,7 +399,7 @@ class ShellViewModelTests(unittest.TestCase):
     execute_action = _actions_by_label(model)['Execute flash plan']
 
     self.assertTrue(execute_action.enabled)
-    self.assertEqual(execute_action.emphasis, 'danger')
+    self.assertEqual(execute_action.emphasis, 'next_danger')
     self.assertEqual(
       model.session_authority.selected_launch_path,
       SessionLaunchPath.SAFE_PATH_CANDIDATE,
@@ -452,6 +473,240 @@ class ShellViewModelTests(unittest.TestCase):
       )
     )
     self.assertTrue(_actions_by_label(model)['Export evidence'].enabled)
+
+  def test_attention_detect_keeps_detect_as_next_workflow_anchor(self) -> None:
+    session = build_demo_session('no-device')
+    live_detection = build_usb_live_detection_session(
+      USBProbeResult(
+        state='attention',
+        summary=(
+          'Native USB scan detected a Samsung download-mode device, but richer '
+          'USB identity strings still need operator attention.'
+        ),
+        devices=(
+          USBDeviceDescriptor(
+            vendor_id=0x04E8,
+            product_id=0x685D,
+            bus=1,
+            address=5,
+            serial_number='usb-attention-lab-01',
+            manufacturer='Samsung',
+            product_name='Samsung download device',
+            command_ready=False,
+          ),
+        ),
+        notes=('Native USB backend resolved from bundled libusb.',),
+      )
+    )
+    model = build_shell_view_model(
+      replace(session, live_detection=live_detection),
+      scenario_name='Attention detect review',
+    )
+
+    actions = _actions_by_label(model)
+
+    self.assertEqual(actions['Detect device'].state.value, 'next')
+    self.assertEqual(actions['Detect device'].emphasis, 'next_danger')
+    self.assertIn('Confirm the direct USB access path', actions['Detect device'].hint)
+    self.assertTrue(
+      any(
+        'Primary next step:' in line
+        for line in model.panels[0].detail_lines
+      )
+    )
+    self.assertEqual(actions['Read PIT'].state.value, 'unavailable')
+    self.assertFalse(actions['Read PIT'].enabled)
+
+  def test_detected_identity_incomplete_usb_advances_workflow_to_read_pit(self) -> None:
+    session = build_demo_session('no-device')
+    live_detection = build_usb_live_detection_session(
+      USBProbeResult(
+        state='detected',
+        summary='Native USB scan detected a Samsung download-mode device.',
+        devices=(
+          USBDeviceDescriptor(
+            vendor_id=0x04E8,
+            product_id=0x685D,
+            bus=1,
+            address=5,
+            serial_number='usb-attention-lab-01',
+            manufacturer='Samsung',
+            product_name='Samsung download device',
+            command_ready=True,
+          ),
+        ),
+        notes=(
+          'Native USB backend resolved from bundled libusb.',
+          'USB descriptors did not expose a Samsung product code for every detected device; continue with bounded download-mode presence and use Read PIT to gather stronger device truth.',
+        ),
+      )
+    )
+    model = build_shell_view_model(
+      replace(session, live_detection=live_detection),
+      scenario_name='USB identity incomplete review',
+    )
+
+    actions = _actions_by_label(model)
+
+    self.assertEqual(model.phase_label, 'Download-Mode Device Detected')
+    self.assertEqual(
+      model.session_authority.reviewed_target_label,
+      'Download-Mode Target Detected',
+    )
+    self.assertEqual(actions['Detect device'].state.value, 'completed')
+    self.assertEqual(actions['Read PIT'].state.value, 'next')
+    self.assertTrue(actions['Read PIT'].enabled)
+    self.assertEqual(actions['Read PIT'].emphasis, 'next')
+    self.assertIn(
+      'reviewed target posture is now Download-Mode Target Detected',
+      model.panels[0].summary,
+    )
+    self.assertTrue(
+      any(
+        'Reviewed target posture: Download-Mode Target Detected' in line
+        for line in model.panels[0].detail_lines
+      )
+    )
+    self.assertTrue(
+      any(
+        'Support posture: identity incomplete' in line
+        for line in model.panels[0].detail_lines
+      )
+    )
+    self.assertTrue(
+      any(
+        'Primary next step: Run Read PIT next to gather bounded partition truth' in line
+        for line in model.panels[0].detail_lines
+      )
+    )
+
+  def test_failed_pit_review_keeps_read_pit_as_next_workflow_step(self) -> None:
+    session = build_demo_session('no-device')
+    ready_session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=ready_session)
+    pit_inspection = replace(
+      build_demo_pit_inspection(
+        'ready',
+        session=ready_session,
+        package_assessment=package_assessment,
+      ),
+      state=PitInspectionState.FAILED,
+      summary='Heimdall PIT acquisition failed before repo-owned PIT inspection could begin.',
+    )
+    live_device = LiveCompanionDeviceViewModel(
+      backend='heimdall',
+      serial='samsung-galaxy-lab-04',
+      state='download',
+      transport='download-mode',
+      product_code='SM-G991U',
+    )
+
+    model = build_shell_view_model(
+      session,
+      scenario_name='Failed PIT retry review',
+      live_device=live_device,
+      pit_inspection=pit_inspection,
+      package_assessment=package_assessment,
+    )
+
+    actions = _actions_by_label(model)
+
+    self.assertEqual(actions['Read PIT'].state.value, 'next')
+    self.assertTrue(actions['Read PIT'].enabled)
+    self.assertEqual(actions['Read PIT'].emphasis, 'next_danger')
+    self.assertIn('retry Read PIT', actions['Read PIT'].hint)
+
+  def test_failed_pit_pre_package_review_defers_package_block_until_load_step(self) -> None:
+    session = replay_events(
+      (
+        PlatformEvent(
+          SessionEventType.DEVICE_CONNECTED,
+          {
+            'device_id': 'usb-1-13',
+            'mode': 'download',
+          },
+        ),
+      )
+    )
+    ready_session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=ready_session)
+    pit_inspection = replace(
+      build_demo_pit_inspection(
+        'ready',
+        session=ready_session,
+        package_assessment=package_assessment,
+      ),
+      state=PitInspectionState.FAILED,
+      summary='Heimdall PIT acquisition failed before repo-owned PIT inspection could begin.',
+      observed_product_code=None,
+      canonical_product_code=None,
+      marketing_name=None,
+      package_alignment=PitPackageAlignment.NOT_REVIEWED,
+      device_alignment=PitDeviceAlignment.NOT_PROVIDED,
+    )
+
+    model = build_shell_view_model(
+      session,
+      scenario_name='Failed PIT before package review',
+      live_device=LiveCompanionDeviceViewModel(
+        backend='usb',
+        serial='usb-1-13',
+        state='download',
+        transport='download-mode',
+      ),
+      pit_inspection=pit_inspection,
+    )
+
+    preflight_metrics = {
+      metric.label: metric.value for metric in model.panels[1].metrics
+    }
+
+    self.assertEqual(preflight_metrics['Blocks'], '1')
+    self.assertTrue(
+      any(
+        'Heimdall PIT acquisition failed before repo-owned PIT inspection could begin.' in line
+        for line in model.panels[1].detail_lines
+      )
+    )
+    self.assertFalse(
+      any(
+        'No firmware package is available to evaluate or execute.' in line
+        for line in model.panels[1].detail_lines
+      )
+    )
+
+  def test_failed_usb_detect_hint_surfaces_self_heal_and_next_step(self) -> None:
+    session = build_demo_session('no-device')
+    live_detection = build_usb_live_detection_session(
+      USBProbeResult(
+        state='failed',
+        summary=(
+          'Native USB detection could not access the Samsung download-mode lane '
+          'until platform USB remediation completes.'
+        ),
+        notes=(
+          'Bundled libusb backend could not be resolved on Windows.',
+        ),
+        remediation_command='powershell.exe -NoProfile -ExecutionPolicy Bypass',
+      )
+    )
+
+    model = build_shell_view_model(
+      replace(session, live_detection=live_detection),
+      scenario_name='Failed USB detect review',
+    )
+
+    detect_action = _actions_by_label(model)['Detect device']
+
+    self.assertEqual(detect_action.state.value, 'next')
+    self.assertIn('Self-heal attempted:', detect_action.hint)
+    self.assertIn('Allow the packaged USB remediation helper to finish', detect_action.hint)
+    self.assertTrue(
+      any(
+        'Self-heal:' in line
+        for line in model.panels[0].detail_lines
+      )
+    )
 
   def test_resume_shell_surfaces_contextual_continue_action(self) -> None:
     session = replay_events(

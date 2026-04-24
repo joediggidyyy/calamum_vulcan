@@ -40,6 +40,7 @@ if QT_AVAILABLE:
   from calamum_vulcan.adapters.heimdall import HeimdallOperation
   from calamum_vulcan.adapters.heimdall import HeimdallProcessResult
   from calamum_vulcan.adapters.heimdall import build_detect_device_command_plan
+  from calamum_vulcan.adapters.heimdall import build_download_pit_command_plan
   from calamum_vulcan.adapters.heimdall import build_print_pit_command_plan
   from calamum_vulcan.adapters.heimdall import normalize_heimdall_result
   os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
@@ -57,6 +58,9 @@ if QT_AVAILABLE:
   from calamum_vulcan.fixtures import load_package_manifest_fixture
   from calamum_vulcan.domain.live_device import build_heimdall_live_detection_session
   from calamum_vulcan.domain.live_device import build_usb_live_detection_session
+  from calamum_vulcan.domain.pit import build_pit_inspection
+  from calamum_vulcan.domain.pit import PitInspectionState
+  from calamum_vulcan.domain.state.integrated_runtime import project_heimdall_trace_to_integrated_runtime
   from calamum_vulcan.usb import USBDeviceDescriptor
   from calamum_vulcan.usb import USBProbeResult
 
@@ -178,6 +182,67 @@ def _no_device_usb_probe_result():
   )
 
 
+def _attention_usb_probe_result():
+  return USBProbeResult(
+    state='attention',
+    summary=(
+      'Native USB scan detected a Samsung download-mode device, but richer '
+      'USB identity strings still need operator attention.'
+    ),
+    devices=(
+      USBDeviceDescriptor(
+        vendor_id=0x04E8,
+        product_id=0x685D,
+        bus=1,
+        address=8,
+        serial_number='usb-attention-lab-01',
+        manufacturer='Samsung',
+        product_name='Samsung download device',
+        command_ready=False,
+      ),
+    ),
+    notes=('Native USB backend resolved from bundled libusb.',),
+  )
+
+
+def _identity_incomplete_usb_probe_result():
+  return USBProbeResult(
+    state='detected',
+    summary='Native USB scan detected a Samsung download-mode device.',
+    devices=(
+      USBDeviceDescriptor(
+        vendor_id=0x04E8,
+        product_id=0x685D,
+        bus=1,
+        address=13,
+        serial_number='usb-1-13',
+        manufacturer='Samsung',
+        product_name='Samsung download device',
+        command_ready=True,
+      ),
+    ),
+    notes=(
+      'Native USB backend resolved from bundled libusb.',
+      'One or more USB identity strings could not be read through the current access path; continuing with bounded download-mode presence only.',
+      'USB descriptors did not expose a Samsung product code for every detected device; continue with bounded download-mode presence and use Read PIT to gather stronger device truth.',
+    ),
+  )
+
+
+def _failed_usb_probe_result():
+  return USBProbeResult(
+    state='failed',
+    summary=(
+      'Native USB detection could not access the Samsung download-mode lane '
+      'until platform USB remediation completes.'
+    ),
+    notes=(
+      'Bundled libusb backend could not be resolved on Windows.',
+    ),
+    remediation_command='powershell.exe -NoProfile -ExecutionPolicy Bypass',
+  )
+
+
 def _write_gui_package_archive(
   temp_root: Path,
   manifest_name: str = 'ready-standard',
@@ -239,6 +304,25 @@ class QtShellContractTests(unittest.TestCase):
     self.assertIn('VULCAN', label_text)
     window.close()
 
+  def test_create_app_icon_provides_square_taskbar_sizes(self) -> None:
+    icon = qt_shell_module.create_app_icon()
+    available_sizes = {
+      (size.width(), size.height()) for size in icon.availableSizes()
+    }
+
+    self.assertFalse(icon.isNull())
+    self.assertTrue(
+      {
+        (16, 16),
+        (24, 24),
+        (32, 32),
+        (48, 48),
+        (64, 64),
+        (128, 128),
+        (256, 256),
+      }.issubset(available_sizes)
+    )
+
   def test_window_supports_runtime_zoom_controls(self) -> None:
     session = build_demo_session('ready')
     package_assessment = build_demo_package_assessment('ready', session=session)
@@ -282,20 +366,235 @@ class QtShellContractTests(unittest.TestCase):
       QtWidgets.QPushButton,
       'control-action-load-package',
     )
+    control_deck = window.findChild(QtWidgets.QFrame, 'control-deck')
+    control_deck_title = window.findChild(QtWidgets.QLabel, 'control-deck-title')
 
     self.assertIsNotNone(detect_button)
     self.assertIsNotNone(adb_combo)
     self.assertIsNotNone(fastboot_combo)
     self.assertIsNotNone(status_label)
     self.assertIsNotNone(load_package_button)
+    self.assertIsNotNone(control_deck)
+    self.assertIsNotNone(control_deck_title)
     self.assertIsNone(window.findChild(QtWidgets.QPushButton, 'live-adb-detect'))
     self.assertIsNone(window.findChild(QtWidgets.QPushButton, 'live-fastboot-detect'))
     self.assertIn('download', window.live_adb_reboot_targets())
     self.assertIn('bootloader', window.live_fastboot_reboot_targets())
-    self.assertEqual(detect_button.toolTip(), '')
-    self.assertEqual(load_package_button.toolTip(), '')
+    self.assertIn('Probe Samsung live presence', detect_button.toolTip())
+    self.assertIn('Reviewed package truth is already staged', load_package_button.toolTip())
+    self.assertIn('Primary flow:', control_deck_title.toolTip())
+    self.assertIn('#4fc08d', detect_button.styleSheet())
+    control_labels = tuple(
+      widget.text()
+      for widget in control_deck.findChildren(QtWidgets.QLabel)
+    )
+    self.assertNotIn(
+      'Primary flow: Detect device -> Read PIT -> Load package -> Execute flash plan -> Export evidence. Continue after recovery appears only when a real bounded resume handoff exists.',
+      control_labels,
+    )
+    self.assertNotIn(
+      'Detect device checks ADB, then fastboot, then Samsung download mode through the native USB lane. Reboot unlocks after detection.',
+      control_labels,
+    )
     self.assertIn('Standby. No live device probe has run since startup.', window.live_status_text())
     window.close()
+
+  def test_window_operational_log_starts_bounded_and_filters_detail_lines(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('ready'),
+      package_assessment=package_assessment,
+    )
+    verbose_seed = (
+      '[SHELL] startup ready',
+      '[COMMAND] adb devices',
+      '[TRACE] raw trace detail',
+      '[COMPANION-DEVICE] serial=abc product=SM-G991U',
+    ) + tuple(
+      '[ACTION] synthetic step {index}'.format(index=index)
+      for index in range(qt_shell_module.GUI_WINDOW_LOG_MAX_LINES + 12)
+    )
+    seeded_model = replace(model, log_lines=verbose_seed)
+    window = ShellWindow(seeded_model)
+    terminal = window.findChild(QtWidgets.QPlainTextEdit)
+    log_titles = tuple(
+      widget.text()
+      for widget in window.findChildren(QtWidgets.QLabel)
+      if widget.text() == 'OPERATIONS LOG'
+    )
+
+    self.assertIsNotNone(terminal)
+    self.assertLessEqual(
+      len(window.operational_log_lines()),
+      qt_shell_module.GUI_WINDOW_LOG_MAX_LINES,
+    )
+    self.assertEqual(
+      terminal.toPlainText().splitlines(),
+      list(window.operations_log_display_lines()),
+    )
+    self.assertEqual(log_titles, ('OPERATIONS LOG',))
+    self.assertIn(
+      qt_shell_module.GUI_WINDOW_LOG_TRIMMED_NOTICE,
+      window.operational_log_lines(),
+    )
+    self.assertFalse(
+      any(
+        line.startswith('[COMMAND]') or line.startswith('[TRACE]')
+        for line in window.operational_log_lines()
+      )
+    )
+    self.assertFalse(
+      any(
+        line.startswith('[COMPANION-DEVICE]')
+        for line in window.operational_log_lines()
+      )
+    )
+    window.close()
+
+  def test_append_live_log_lines_keeps_window_bounded_and_collapses_duplicates(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('ready'),
+      package_assessment=package_assessment,
+    )
+    window = ShellWindow(replace(model, log_lines=()))
+
+    burst = (
+      '[COMPANION-PENDING] adb_devices',
+      '[COMPANION-PENDING] adb_devices',
+      '[COMPANION-PENDING] adb_devices',
+      '[COMMAND] adb devices',
+      '[TRACE] raw output detail',
+    )
+
+    window._append_live_log_lines(burst)
+    self.assertIn(
+      '[COMPANION-PENDING] adb_devices (x3)',
+      window.operational_log_lines(),
+    )
+    self.assertIn(
+      ('COMPANION PENDING', 'adb_devices (x3)'),
+      window.operational_log_entries(),
+    )
+
+    overflow_lines = tuple(
+      '[ACTION] step {index}'.format(index=index)
+      for index in range(qt_shell_module.GUI_WINDOW_LOG_MAX_LINES + 20)
+    )
+
+    window._append_live_log_lines(overflow_lines)
+    rendered_lines = window.operational_log_lines()
+    terminal = window.findChild(QtWidgets.QPlainTextEdit)
+
+    self.assertIsNotNone(terminal)
+    self.assertLessEqual(
+      len(rendered_lines),
+      qt_shell_module.GUI_WINDOW_LOG_MAX_LINES,
+    )
+    self.assertIn(qt_shell_module.GUI_WINDOW_LOG_TRIMMED_NOTICE, rendered_lines)
+    self.assertFalse(any(line.startswith('[COMMAND]') for line in rendered_lines))
+    self.assertFalse(any(line.startswith('[TRACE]') for line in rendered_lines))
+    self.assertEqual(
+      terminal.toPlainText().splitlines(),
+      list(window.operations_log_display_lines()),
+    )
+    window.close()
+
+  def test_rendered_trace_lines_are_single_line_operator_summaries(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('ready'),
+      package_assessment=package_assessment,
+    )
+    window = ShellWindow(model)
+
+    live_lines = window._render_live_trace_lines(_ready_adb_detection_trace())
+    usb_lines = window._render_usb_probe_lines(_ready_usb_probe_result())
+    pit_lines = window._render_pit_trace_lines(_ready_print_pit_trace())
+
+    self.assertEqual(len(live_lines), 1)
+    self.assertEqual(len(usb_lines), 1)
+    self.assertEqual(len(pit_lines), 1)
+    self.assertIn('adb_devices', live_lines[0])
+    self.assertIn('R58N12345AB', live_lines[0])
+    self.assertIn('native_usb_download_detect', usb_lines[0])
+    self.assertIn('SM-G991U', usb_lines[0])
+    self.assertIn('print_pit', pit_lines[0])
+    self.assertNotIn('[COMPANION-DEVICE]', live_lines[0])
+    self.assertNotIn('[COMPANION-NOTE]', live_lines[0])
+    window.close()
+
+  def test_rendered_failed_usb_probe_lines_surface_visible_self_heal_and_next_step(self) -> None:
+    session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=session)
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('ready'),
+      package_assessment=package_assessment,
+    )
+    window = ShellWindow(model)
+
+    lines = window._render_usb_probe_lines(_failed_usb_probe_result())
+    window._append_live_log_lines(lines)
+
+    self.assertEqual(len(lines), 3)
+    self.assertTrue(any(line.startswith('[SELF-HEAL]') for line in lines))
+    self.assertTrue(any(line.startswith('[NEXT-STEP]') for line in lines))
+    self.assertTrue(
+      any(line.startswith('[SELF-HEAL]') for line in window.operational_log_lines())
+    )
+    self.assertTrue(
+      any(line.startswith('[NEXT-STEP]') for line in window.operational_log_lines())
+    )
+    window.close()
+
+  def test_usb_attention_result_persists_blocker_artifact_and_status(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+
+    class _FakeScreenshot:
+      def save(self, path: str) -> bool:
+        Path(path).write_bytes(b'png')
+        return True
+
+    with tempfile.TemporaryDirectory() as temp_dir, mock.patch.object(
+      qt_shell_module,
+      '_interactive_blocker_artifact_root',
+      return_value=Path(temp_dir),
+    ):
+      window = ShellWindow(model)
+      with mock.patch.object(window, 'grab', return_value=_FakeScreenshot()):
+        window._apply_unified_usb_detection_result(_attention_usb_probe_result())
+
+      summary_paths = tuple(Path(temp_dir).glob('*.json'))
+
+      self.assertTrue(summary_paths)
+      payload = json.loads(summary_paths[0].read_text(encoding='utf-8'))
+      self.assertEqual(payload['live_detection']['state'], 'attention')
+      self.assertIsNone(payload['live_detection']['self_heal_attempted'])
+      self.assertIn(
+        'Confirm the direct USB access path',
+        payload['live_detection']['next_step'],
+      )
+      self.assertIn('Blocked-state evidence saved to', window.live_status_text())
+      self.assertIn('Confirm the direct USB path', window.live_status_text())
+      self.assertTrue(
+        any(
+          line.startswith('[BLOCKER-EVIDENCE] summary=')
+          for line in window.operational_log_lines()
+        )
+      )
+      window.close()
 
   def test_window_uses_hidden_independent_scroll_regions(self) -> None:
     session = build_demo_session('ready')
@@ -352,6 +651,189 @@ class QtShellContractTests(unittest.TestCase):
       brand_mark.mapTo(window, qt_shell_module.QtCore.QPoint(0, 0)).y(),
       brand_origin,
     )
+    window.close()
+
+  def test_control_deck_stays_inside_window_at_tiled_width(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+    window = ShellWindow(model)
+    window.resize(1080, 760)
+    window.show()
+
+    control_scroll = window.findChild(QtWidgets.QScrollArea, 'control-deck-scroll')
+
+    self.assertIsNotNone(control_scroll)
+    self.assertTrue(
+      self._process_events_until(lambda: control_scroll.isVisible())
+    )
+
+    control_right = control_scroll.mapTo(
+      window,
+      qt_shell_module.QtCore.QPoint(control_scroll.width(), 0),
+    ).x()
+
+    self.assertLessEqual(control_right, window.width())
+    window.close()
+
+  def test_control_deck_title_wraps_for_long_download_mode_phase(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+    window = ShellWindow(model)
+    window.resize(1080, 760)
+    window.show()
+    window._apply_unified_usb_detection_result(_identity_incomplete_usb_probe_result())
+
+    title = window.findChild(QtWidgets.QLabel, 'control-deck-title')
+    control_scroll = window.findChild(QtWidgets.QScrollArea, 'control-deck-scroll')
+
+    self.assertIsNotNone(title)
+    self.assertIsNotNone(control_scroll)
+    self.assertTrue(
+      self._process_events_until(
+        lambda: title.isVisible() and control_scroll.isVisible()
+      )
+    )
+
+    self.assertTrue(title.wordWrap())
+    self.assertEqual(title.text(), 'Download-Mode Device Detected')
+    self.assertLessEqual(title.width(), control_scroll.viewport().width())
+    window.close()
+
+  def test_detected_identity_incomplete_usb_unlocks_read_pit_without_blocker_artifact(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+
+    with tempfile.TemporaryDirectory() as temp_dir, mock.patch.object(
+      qt_shell_module,
+      '_interactive_blocker_artifact_root',
+      return_value=Path(temp_dir),
+    ):
+      window = ShellWindow(model)
+      window._apply_unified_usb_detection_result(_identity_incomplete_usb_probe_result())
+
+      read_pit_button = window.findChild(
+        QtWidgets.QPushButton,
+        'control-action-read-pit',
+      )
+      live_status_label = window.findChild(
+        QtWidgets.QLabel,
+        'live-companion-status',
+      )
+
+      self.assertEqual(window.phase_label(), 'Download-Mode Device Detected')
+      self.assertIsNotNone(read_pit_button)
+      self.assertIsNotNone(live_status_label)
+      self.assertTrue(read_pit_button.isEnabled())
+      self.assertIn('Read PIT', window.live_status_text())
+      self.assertNotIn('Identity is still partial.', window.live_status_text())
+      self.assertIn('Next: Run Read PIT.', window.live_status_text())
+      self.assertNotIn(
+        'The active source did not provide enough identity',
+        window.live_status_text(),
+      )
+      self.assertIn(
+        qt_shell_module.COLOR_TOKENS['info'],
+        live_status_label.styleSheet(),
+      )
+      self.assertFalse(tuple(Path(temp_dir).glob('*.json')))
+      self.assertFalse(
+        any(
+          line.startswith('[BLOCKER-EVIDENCE]')
+          for line in window.operational_log_lines()
+        )
+      )
+      window.close()
+
+  def test_header_subtitle_tracks_live_shell_state_instead_of_stale_scenario_label(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+    window = ShellWindow(model)
+    brand_mark = window.findChild(BrandMark)
+
+    self.assertIsNotNone(brand_mark)
+    initial_text = tuple(
+      widget.text() for widget in brand_mark.findChildren(QtWidgets.QLabel)
+    )
+    self.assertIn('No Device · startup standby shell', initial_text)
+
+    window._apply_unified_usb_detection_result(_identity_incomplete_usb_probe_result())
+
+    self.assertTrue(
+      self._process_events_until(
+        lambda: any(
+          widget.text().startswith('Download-Mode Device Detected · ')
+          for widget in window.findChild(BrandMark).findChildren(QtWidgets.QLabel)
+        )
+      )
+    )
+
+    updated_text = tuple(
+      widget.text() for widget in window.findChild(BrandMark).findChildren(QtWidgets.QLabel)
+    )
+    self.assertTrue(
+      any(
+        text.startswith('Download-Mode Device Detected · ')
+        for text in updated_text
+      )
+    )
+    self.assertFalse(any('No-device control deck' in text for text in updated_text))
+    window.close()
+
+  def test_failed_pit_retry_button_keeps_next_step_green_text_with_red_border(self) -> None:
+    session = build_demo_session('no-device')
+    ready_session = build_demo_session('ready')
+    package_assessment = build_demo_package_assessment('ready', session=ready_session)
+    pit_inspection = replace(
+      build_demo_pit_inspection(
+        'ready',
+        session=ready_session,
+        package_assessment=package_assessment,
+      ),
+      state=PitInspectionState.FAILED,
+      summary='Heimdall PIT acquisition failed before repo-owned PIT inspection could begin.',
+    )
+    live_device = LiveCompanionDeviceViewModel(
+      backend='heimdall',
+      serial='samsung-galaxy-lab-04',
+      state='download',
+      transport='download-mode',
+      product_code='SM-G991U',
+    )
+    model = build_shell_view_model(
+      session,
+      scenario_name='Failed PIT retry review',
+      live_device=live_device,
+      pit_inspection=pit_inspection,
+      package_assessment=package_assessment,
+    )
+    window = ShellWindow(model)
+
+    read_pit_button = window.findChild(
+      QtWidgets.QPushButton,
+      'control-action-read-pit',
+    )
+
+    self.assertIsNotNone(read_pit_button)
+    self.assertTrue(read_pit_button.isEnabled())
+    self.assertIn(qt_shell_module.COLOR_TOKENS['danger'], read_pit_button.styleSheet())
+    self.assertIn(qt_shell_module.COLOR_TOKENS['success'], read_pit_button.styleSheet())
+    self.assertIn('retry Read PIT', read_pit_button.toolTip())
     window.close()
 
   def test_launch_shell_maximizes_interactive_window(self) -> None:
@@ -1022,6 +1504,132 @@ class QtShellContractTests(unittest.TestCase):
     self.assertIsNotNone(window.centralWidget())
     window.close()
 
+  def test_set_live_detection_defers_and_coalesces_shell_refresh_until_event_loop_returns(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+    window = ShellWindow(model)
+
+    first_detection = build_usb_live_detection_session(
+      _ready_usb_probe_result(),
+      source_labels=('adb', 'fastboot', 'usb'),
+    )
+    second_detection = build_usb_live_detection_session(
+      _attention_usb_probe_result(),
+      source_labels=('adb', 'fastboot', 'usb'),
+    )
+
+    with mock.patch.object(
+      window,
+      '_refresh_shell_view_model',
+      wraps=window._refresh_shell_view_model,
+    ) as mocked_refresh:
+      window._defer_shell_view_refresh = True
+      window._set_live_detection(first_detection)
+      window._set_live_detection(second_detection)
+      window._defer_shell_view_refresh = False
+
+      self.assertEqual(mocked_refresh.call_count, 0)
+      self.assertTrue(
+        self._process_events_until(lambda: mocked_refresh.call_count == 1)
+      )
+
+    self.assertEqual(window.phase_label(), 'Download-Mode Device Attention')
+    window.close()
+
+  def test_unified_detect_fallback_does_not_rebuild_shell_between_adb_and_fastboot(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+    window = ShellWindow(model)
+
+    with mock.patch.object(
+      window,
+      '_refresh_shell_view_model',
+      wraps=window._refresh_shell_view_model,
+    ) as mocked_refresh, mock.patch.object(
+      window,
+      '_start_live_command',
+      return_value=None,
+    ) as mocked_start:
+      window._apply_unified_adb_detection_trace(_no_device_adb_detection_trace())
+
+    self.assertEqual(mocked_refresh.call_count, 0)
+    self.assertEqual(window.phase_label(), 'No Device')
+    mocked_start.assert_called_once()
+    self.assertIn('Checking fastboot', mocked_start.call_args.args[1])
+    window.close()
+
+  def test_adb_detect_waiting_for_device_info_skips_intermediate_shell_rebuild(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+    window = ShellWindow(model)
+
+    with mock.patch.object(
+      window,
+      '_refresh_shell_view_model',
+      wraps=window._refresh_shell_view_model,
+    ) as mocked_refresh, mock.patch.object(
+      window,
+      '_start_live_command',
+      return_value=None,
+    ) as mocked_start:
+      window._apply_adb_detection_trace(_ready_adb_detection_trace())
+
+    self.assertEqual(mocked_refresh.call_count, 0)
+    current_adb_identity = window.findChild(QtWidgets.QLabel, 'live-adb-serial')
+    self.assertIsNotNone(current_adb_identity)
+    self.assertIn('R58N12345AB', current_adb_identity.text())
+    mocked_start.assert_called_once()
+    self.assertIn('Gathering live device info via ADB', mocked_start.call_args.args[1])
+    window.close()
+
+  def test_refresh_shell_view_model_uses_transient_overlay_during_visible_rebuild(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+    window = ShellWindow(model)
+    window.show()
+
+    with mock.patch.object(
+      window,
+      '_show_ui_rebuild_overlay',
+      wraps=window._show_ui_rebuild_overlay,
+    ) as mocked_show, mock.patch.object(
+      window,
+      '_clear_ui_rebuild_overlay',
+      wraps=window._clear_ui_rebuild_overlay,
+    ) as mocked_clear:
+      window._refresh_shell_view_model()
+
+      self.assertEqual(mocked_show.call_count, 1)
+      overlay = window._ui_rebuild_overlay
+      self.assertIsNotNone(overlay)
+      self.assertTrue(
+        overlay.testAttribute(
+          qt_shell_module.QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+      )
+      self.assertTrue(
+        self._process_events_until(lambda: mocked_clear.call_count == 1)
+      )
+
+    self.assertIsNone(window._ui_rebuild_overlay)
+    window.close()
+
   def test_detail_row_height_expands_for_wrapped_value_text(self) -> None:
     row = DetailRow(
       (
@@ -1208,6 +1816,10 @@ class QtShellContractTests(unittest.TestCase):
       self.assertTrue(
         self._process_events_until(lambda: mocked_usb.call_count == 1)
       )
+      self.assertEqual(
+        mocked_usb.call_args.kwargs,
+        {'read_identity_strings': False},
+      )
       self.assertTrue(
         self._process_events_until(
           lambda: window.phase_label() == 'Download-Mode Device Detected'
@@ -1355,8 +1967,231 @@ class QtShellContractTests(unittest.TestCase):
 
       device_pills = dict(window.status_pill_values())
       self.assertEqual(device_pills['Device'], '--')
-      self.assertIn('disconnect', window.live_status_text().lower())
+      self.assertEqual(window.live_status_text(), 'The active live device disconnected.')
+      self.assertIn(
+        '[COMPANION-CLEAR] The active live device disconnected.',
+        window.operational_log_lines(),
+      )
       window.close()
+
+  def test_pit_command_result_logs_supported_path_trace_not_raw_heimdall_summary(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+    window = ShellWindow(model)
+    raw_trace = normalize_heimdall_result(
+      build_print_pit_command_plan(),
+      HeimdallProcessResult(
+        fixture_name='pit-print-device-busy',
+        operation=HeimdallOperation.PRINT_PIT,
+        exit_code=1,
+        stdout_lines=(),
+        stderr_lines=('Error: Failed to claim interface for PIT read',),
+      ),
+    )
+    window._pit_completion_handlers[99] = lambda _trace: None
+
+    window._handle_pit_command_result(99, raw_trace, None)
+
+    self.assertTrue(
+      any(
+        'Calamum integrated runtime could not capture bounded PIT truth before repo-owned inspection could continue.' in line
+        for line in window.operational_log_lines()
+      )
+    )
+    self.assertFalse(
+      any(
+        'Heimdall print_pit failed before any platform state change was allowed.' in line
+        for line in window.operational_log_lines()
+      )
+    )
+    window.close()
+
+  def test_visible_operational_log_hides_raw_pit_stderr_detail_lines(self) -> None:
+    session = build_demo_session('no-device')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('no-device'),
+      boot_unhydrated=True,
+    )
+    window = ShellWindow(model)
+
+    window._append_live_log_lines(
+      (
+        '[INSPECTION-PIT] print_pit -> failed: Calamum integrated runtime could not capture bounded PIT truth before repo-owned inspection could continue.',
+        "[INSPECTION-PIT-STDERR] libusb: error [init_device] device '\\\\.\\USB#VID_04E8&PID_B7E8&MI_02#{6834F87EB9B80&0002}' is no longer connected!",
+      )
+    )
+
+    self.assertTrue(
+      any(
+        line.startswith('[INSPECTION-PIT] print_pit -> failed:')
+        for line in window.operational_log_lines()
+      )
+    )
+    self.assertFalse(
+      any(
+        line.startswith('[INSPECTION-PIT-STDERR]')
+        for line in window.operational_log_lines()
+      )
+    )
+    window.close()
+
+  def test_failed_read_pit_disconnect_status_is_compact_for_live_banner(self) -> None:
+    live_detection = build_usb_live_detection_session(
+      _ready_usb_probe_result(),
+      source_labels=('adb', 'fastboot', 'usb'),
+    )
+    model = build_shell_view_model(
+      replace(build_demo_session('no-device'), live_detection=live_detection),
+      scenario_name='Compact PIT disconnect status',
+    )
+    window = ShellWindow(model)
+    pit_trace = normalize_heimdall_result(
+      build_download_pit_command_plan(output_path='artifacts/device.pit'),
+      HeimdallProcessResult(
+        fixture_name='pit-download-disconnected',
+        operation=HeimdallOperation.DOWNLOAD_PIT,
+        exit_code=1,
+        stdout_lines=(),
+        stderr_lines=(
+          "libusb: error [init_device] device '\\\\.\\USB#VID_04E8&PID_B7E8&MI_02#{6834F87EB9B80&0002}' is no longer connected!",
+        ),
+      ),
+    )
+
+    window._finish_read_pit_workflow(
+      build_pit_inspection(
+        project_heimdall_trace_to_integrated_runtime(pit_trace),
+        detected_product_code='SM-G991U',
+      )
+    )
+
+    self.assertEqual(
+      window.live_status_text(),
+      'Supported-path PIT acquisition lost access to the device interface.',
+    )
+    self.assertTrue(
+      any(
+        'Reason: The supported-path transport lost access to the Samsung download-mode interface during PIT acquisition.' in line
+        for line in window.operational_log_lines()
+      )
+    )
+    window.close()
+
+  def test_read_pit_disconnect_failure_skips_metadata_only_fallback(self) -> None:
+    session = build_demo_session('ready')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('ready'),
+      live_device=LiveCompanionDeviceViewModel(
+        backend='usb',
+        serial='samsung-galaxy-lab-04',
+        state='download',
+        transport='download-mode',
+        product_code='SM-G991U',
+      ),
+    )
+    disconnected_trace = normalize_heimdall_result(
+      build_print_pit_command_plan(),
+      HeimdallProcessResult(
+        fixture_name='pit-print-disconnected',
+        operation=HeimdallOperation.PRINT_PIT,
+        exit_code=1,
+        stdout_lines=(),
+        stderr_lines=(
+          "libusb: error [init_device] device '\\\\.\\USB#VID_04E8&PID_B7E8&MI_02#{6834F87EB9B80&0002}' is no longer connected!",
+        ),
+      ),
+    )
+
+    with mock.patch(
+      'calamum_vulcan.app.qt_shell.execute_heimdall_command',
+      side_effect=(
+        _ready_heimdall_detection_trace(),
+        disconnected_trace,
+      ),
+    ) as mocked_heimdall:
+      window = ShellWindow(model)
+
+      read_pit_button = window.findChild(
+        QtWidgets.QPushButton,
+        'control-action-read-pit',
+      )
+
+      self.assertIsNotNone(read_pit_button)
+      read_pit_button.click()
+
+      self.assertTrue(
+        self._process_events_until(lambda: mocked_heimdall.call_count == 2)
+      )
+      self.assertEqual(mocked_heimdall.call_count, 2)
+      self.assertFalse(
+        any(
+          'attempting metadata-only download-pit fallback' in line
+          for line in window.operational_log_lines()
+        )
+      )
+      self.assertTrue(
+        self._process_events_until(
+          lambda: window.live_status_text()
+          == 'Supported-path PIT acquisition lost access to the device interface.'
+        )
+      )
+      self.assertEqual(mocked_heimdall.call_count, 2)
+      self.assertEqual(
+        window.live_status_text(),
+        'Supported-path PIT acquisition lost access to the device interface.',
+      )
+      window.close()
+
+  def test_start_pit_command_waits_for_active_disconnect_monitor_thread(self) -> None:
+    session = build_demo_session('ready')
+    model = build_shell_view_model(
+      session,
+      scenario_name=scenario_label('ready'),
+      live_device=LiveCompanionDeviceViewModel(
+        backend='usb',
+        serial='samsung-galaxy-lab-04',
+        state='download',
+        transport='download-mode',
+        product_code='SM-G991U',
+      ),
+    )
+    window = ShellWindow(model)
+    attempts = {'count': 0}
+
+    def _monitor_running() -> bool:
+      attempts['count'] += 1
+      return attempts['count'] == 1
+
+    with mock.patch.object(
+      window,
+      '_disconnect_monitor_thread_running',
+      side_effect=_monitor_running,
+    ), mock.patch.object(
+      window,
+      '_set_live_busy',
+      wraps=window._set_live_busy,
+    ) as mocked_busy:
+      window._start_pit_command(
+        build_print_pit_command_plan(),
+        'Read PIT: capturing bounded Samsung partition truth through the integrated runtime…',
+        lambda _trace: None,
+      )
+
+      self.assertEqual(
+        window.live_status_text(),
+        'Read PIT is waiting for the active USB monitor check to finish…',
+      )
+      self.assertEqual(mocked_busy.call_count, 0)
+      self.assertTrue(
+        self._process_events_until(lambda: mocked_busy.call_count == 1)
+      )
+    window.close()
 
   def test_disconnect_monitor_cancels_pending_clear_when_presence_recovers(self) -> None:
     live_detection = build_usb_live_detection_session(
@@ -1652,7 +2487,10 @@ class QtShellContractTests(unittest.TestCase):
       side_effect=AssertionError('Read PIT should not invoke adb/fastboot probes when download-mode truth already exists.'),
     ) as mocked_android, mock.patch(
       'calamum_vulcan.app.qt_shell.execute_heimdall_command',
-      return_value=_ready_print_pit_trace(),
+      side_effect=(
+        _ready_heimdall_detection_trace(),
+        _ready_print_pit_trace(),
+      ),
     ) as mocked_heimdall:
       window = ShellWindow(model)
 
@@ -1666,13 +2504,25 @@ class QtShellContractTests(unittest.TestCase):
 
       mocked_android.assert_not_called()
       self.assertTrue(
-        self._process_events_until(lambda: mocked_heimdall.call_count == 1)
+        self._process_events_until(lambda: mocked_heimdall.call_count == 2)
       )
-      mocked_heimdall.assert_called_once()
+      self.assertEqual(mocked_heimdall.call_count, 2)
       self.assertTrue(
         self._process_events_until(
           lambda: 'Inspect-only workflow captured' in window.panel_summary('Session Evidence'),
           timeout_seconds=1.5,
+        )
+      )
+      self.assertTrue(
+        any(
+          line.startswith('[PIT-HANDOFF]')
+          for line in window.operational_log_lines()
+        )
+      )
+      self.assertTrue(
+        any(
+          line.startswith('[INSPECTION-HANDOFF] detect ->')
+          for line in window.operational_log_lines()
         )
       )
 

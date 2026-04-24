@@ -88,6 +88,10 @@ required = [
   'calamum_vulcan/launch_shell.py',
   'calamum_vulcan/assets/branding/calamum_logo_color.png',
   'calamum_vulcan/assets/branding/calamum_taskbar_icon.png',
+  'calamum_vulcan/assets/bin/windows/heimdall/heimdall.exe',
+  'calamum_vulcan/assets/bin/windows/heimdall/libusb-1.0.dll',
+  'calamum_vulcan/assets/bin/windows/heimdall/LICENSE.txt',
+  'calamum_vulcan/assets/bin/windows/heimdall/README.md',
   'calamum_vulcan/fixtures/package_manifests/matched_recovery_package.json',
   'calamum_vulcan/fixtures/package_manifests/mismatched_recovery_package.json',
   'calamum_vulcan/fixtures/package_manifests/incomplete_recovery_package.json',
@@ -368,7 +372,7 @@ def main() -> int:
       sys.executable,
       '-c', _cli_probe_code(install_root),
       '--scenario', 'failure',
-      '--transport-source', 'heimdall-adapter',
+      '--transport-source', 'integrated-runtime',
       '--describe-only',
       '--export-evidence',
       '--evidence-format', 'json',
@@ -395,7 +399,7 @@ def main() -> int:
       sys.executable,
       '-c', _cli_probe_code(install_root),
       '--execute-flash-plan',
-      '--transport-source', 'heimdall-adapter',
+      '--transport-source', 'integrated-runtime',
       '--scenario', 'ready',
       '--control-format', 'json',
       '--export-evidence',
@@ -422,7 +426,7 @@ def main() -> int:
       sys.executable,
       '-c', _cli_probe_code(install_root),
       '--execute-flash-plan',
-      '--transport-source', 'heimdall-adapter',
+      '--transport-source', 'integrated-runtime',
       '--scenario', 'blocked',
       '--control-format', 'json',
     ],
@@ -543,6 +547,41 @@ def main() -> int:
   if fallback_boundary is None or fallback_boundary['live_source'] != 'fastboot':
     raise SystemExit('Installed safe-path-close bundle did not preserve the fastboot fallback boundary review.')
 
+  autonomy_bundle_path = output_dir / 'autonomy_close_bundle.json'
+  _run(
+    [
+      sys.executable,
+      '-c', _cli_probe_code(install_root),
+      '--integration-suite', 'autonomy-close',
+      '--suite-format', 'json',
+      '--suite-output', str(autonomy_bundle_path),
+    ],
+    cwd=work_dir,
+  )
+  autonomy_bundle = _read_json(autonomy_bundle_path)
+  if autonomy_bundle['suite_name'] != 'autonomy-close':
+    raise SystemExit('Installed autonomy-close bundle lost the expected suite name.')
+  autonomy_map = {
+    scenario['scenario_id']: scenario for scenario in autonomy_bundle['scenarios']
+  }
+  supported_ready = autonomy_map.get('supported-path-ready-review')
+  runtime_complete = autonomy_map.get('integrated-runtime-complete')
+  runtime_failure = autonomy_map.get('integrated-runtime-failure-review')
+  runtime_resume = autonomy_map.get('integrated-runtime-resume-review')
+  fallback_boundary = autonomy_map.get('fastboot-fallback-boundary-review')
+  if supported_ready is None or supported_ready['transport_source'] != 'integrated-runtime':
+    raise SystemExit('Installed autonomy-close bundle did not preserve the integrated-runtime supported-path review label.')
+  if supported_ready['pit_source'] != 'integrated_runtime_print_pit' or supported_ready['live_source'] != 'usb':
+    raise SystemExit('Installed autonomy-close bundle did not preserve the supported-path review evidence contract.')
+  if runtime_complete is None or runtime_complete['transport_state'] != 'completed' or runtime_complete['transcript_preserved'] is not True:
+    raise SystemExit('Installed autonomy-close bundle did not preserve the completed integrated-runtime proof lane.')
+  if runtime_failure is None or runtime_failure['transport_state'] != 'failed' or runtime_failure['transcript_preserved'] is not True:
+    raise SystemExit('Installed autonomy-close bundle did not preserve the failed integrated-runtime proof lane.')
+  if runtime_resume is None or runtime_resume['transport_state'] != 'completed' or runtime_resume['transcript_preserved'] is not True:
+    raise SystemExit('Installed autonomy-close bundle did not preserve the resume integrated-runtime proof lane.')
+  if fallback_boundary is None or fallback_boundary['live_source'] != 'fastboot' or fallback_boundary['transport_state'] != 'not_invoked':
+    raise SystemExit('Installed autonomy-close bundle did not preserve the explicit fallback boundary review lane.')
+
   security_summary = run_security_validation_suite(REPO_ROOT)
   write_security_validation_artifacts(
     VALIDATION_ROOT / 'security_validation',
@@ -568,6 +607,7 @@ def main() -> int:
       'safe_path_execute="passed"',
       'evidence_export="passed"',
       'integration_bundle="passed"',
+      'autonomy_close_bundle="passed"',
       'read_side_close_bundle="passed"',
       'distribution_files="passed"',
       'installed_artifact_contract="passed"',

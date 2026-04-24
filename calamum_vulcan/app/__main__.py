@@ -33,18 +33,19 @@ from ..adapters.adb_fastboot import build_fastboot_reboot_command_plan
 from ..adapters.adb_fastboot import execute_android_tools_command
 from ..adapters.heimdall import build_download_pit_command_plan
 from ..adapters.heimdall import build_print_pit_command_plan
-from ..adapters.heimdall import execute_heimdall_command
 from ..adapters.heimdall import run_bounded_heimdall_flash_session
 from .demo import available_scenarios
 from .demo import available_adapter_fixtures
 from .demo import build_demo_pit_inspection
 from .demo import available_transport_sources
 from .demo import build_demo_adapter_session
+from .demo import build_demo_integrated_runtime_session
 from .demo import build_demo_package_assessment
 from .demo import build_demo_safe_path_runtime_context
 from .demo import build_demo_session
 from .demo import scenario_label
 from .integration import available_integration_suites
+from .integration import build_autonomy_close_bundle
 from .integration import build_orchestration_close_bundle
 from .integration import build_read_side_close_bundle
 from .integration import build_safe_path_close_bundle
@@ -69,6 +70,10 @@ from ..domain.reporting import serialize_session_evidence_json
 from ..domain.reporting import write_session_evidence_report
 from ..domain.state import build_inspection_workflow
 from ..domain.state import RuntimeSessionRejected
+from ..domain.state.integrated_runtime import INTEGRATED_RUNTIME_BACKEND
+from ..domain.state.integrated_runtime import build_integrated_reviewed_flash_plan
+from ..domain.state.integrated_runtime import execute_integrated_command
+from ..domain.state.integrated_runtime import run_integrated_flash_session
 from ..fixtures import available_package_manifest_fixtures
 from .qt_compat import QT_AVAILABLE
 from .qt_compat import QtWidgets
@@ -90,6 +95,7 @@ INFORMATIONAL_FLAG_NAMES = VERSION_FLAG_NAMES | HELP_FLAG_NAMES
 DEFAULT_GUI_BOOT_ARGS = ('--scenario', 'no-device', '--boot-unhydrated')
 ANSI_RESET = '\x1b[0m'
 ANSI_BRAND_BLUE = '\x1b[96m'
+INTEGRATED_RUNTIME_REVIEW_SCENARIOS = frozenset(('happy', 'failure', 'resume'))
 
 
 class _GuiStartupStream(io.TextIOBase):
@@ -343,7 +349,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
   parser.add_argument(
     '--execute-flash-plan',
     action='store_true',
-    help='Run the platform-supervised bounded safe-path flash lane. The Sprint 6 supported-path token is --transport-source integrated-runtime, but the current executable lane still requires --transport-source heimdall-adapter until the integrated runtime lands.',
+    help='Run the platform-supervised bounded safe-path flash lane. Use --transport-source integrated-runtime for the Sprint 6 supported path, or --transport-source heimdall-adapter for the explicit historical fallback lane.',
   )
   parser.add_argument(
     '--device-serial',
@@ -381,7 +387,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     '--transport-source',
     choices=available_transport_sources(),
     default='state-fixture',
-    help='Choose fixture review (state-fixture), the reserved Sprint 6 supported-path token (integrated-runtime), or the historical Heimdall adapter seam (heimdall-adapter).',
+    help='Choose fixture review (state-fixture), the Sprint 6 supported-path runtime (integrated-runtime), or the historical Heimdall adapter seam (heimdall-adapter).',
   )
   parser.add_argument(
     '--adapter-fixture',
@@ -519,6 +525,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     bundle = build_read_side_close_bundle(captured_at_utc=args.captured_at_utc)
   elif args.integration_suite == 'safe-path-close':
     bundle = build_safe_path_close_bundle(captured_at_utc=args.captured_at_utc)
+  elif args.integration_suite == 'autonomy-close':
+    bundle = build_autonomy_close_bundle(captured_at_utc=args.captured_at_utc)
   if bundle is not None:
     if args.suite_output:
       output_path = write_sprint_close_bundle(
@@ -541,6 +549,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
   scenario = scenario_label(args.scenario)
   _validate_package_inputs(args)
   transport_trace = None
+  transport_backend = 'heimdall'
   if args.transport_source == 'heimdall-adapter':
     session, package_assessment, transport_trace = build_demo_adapter_session(
       args.scenario,
@@ -548,26 +557,40 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
       adapter_fixture_name=args.adapter_fixture,
     )
   else:
-    session = build_demo_session(args.scenario)
-    package_assessment = None
-    if args.package_archive:
-      try:
-        package_assessment = assess_package_archive(
-          Path(args.package_archive),
-          detected_product_code=session.product_code,
-        )
-      except PackageArchiveImportError as error:
-        raise SystemExit(str(error))
-    elif session.guards.package_loaded or args.package_fixture != 'scenario-default':
-      package_assessment = build_demo_package_assessment(
+    if args.transport_source == INTEGRATED_RUNTIME_BACKEND:
+      transport_backend = INTEGRATED_RUNTIME_BACKEND
+    if (
+      transport_backend == INTEGRATED_RUNTIME_BACKEND
+      and args.scenario in INTEGRATED_RUNTIME_REVIEW_SCENARIOS
+      and not args.package_archive
+    ):
+      session, package_assessment, transport_trace = build_demo_integrated_runtime_session(
         args.scenario,
-        session=session,
         package_fixture_name=args.package_fixture,
+        adapter_fixture_name=args.adapter_fixture,
       )
+    else:
+      session = build_demo_session(args.scenario)
+      package_assessment = None
+      if args.package_archive:
+        try:
+          package_assessment = assess_package_archive(
+            Path(args.package_archive),
+            detected_product_code=session.product_code,
+          )
+        except PackageArchiveImportError as error:
+          raise SystemExit(str(error))
+      elif session.guards.package_loaded or args.package_fixture != 'scenario-default':
+        package_assessment = build_demo_package_assessment(
+          args.scenario,
+          session=session,
+          package_fixture_name=args.package_fixture,
+        )
   pit_inspection = build_demo_pit_inspection(
     args.scenario,
     session=session,
     package_assessment=package_assessment,
+    transport_backend=transport_backend,
   )
   session_report = build_session_evidence_report(
     session,
@@ -575,6 +598,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     package_assessment=package_assessment,
     pit_inspection=pit_inspection,
     transport_trace=transport_trace,
+    transport_backend=transport_backend,
     captured_at_utc=args.captured_at_utc,
     pit_required_for_safe_path=True,
   )
@@ -585,6 +609,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     pit_inspection=pit_inspection,
     transport_trace=transport_trace,
     session_report=session_report,
+    transport_backend=transport_backend,
     boot_unhydrated=args.boot_unhydrated,
     pit_required_for_safe_path=True,
   )
@@ -656,13 +681,9 @@ def _validate_package_inputs(args: argparse.Namespace) -> None:
 
 
 def _validate_transport_source_selection(args: argparse.Namespace) -> None:
-  """Reject reserved transport tokens that are not executable yet."""
+  """Validate transport-source combinations that span shell and live-runtime lanes."""
 
-  if args.transport_source != 'integrated-runtime':
-    return
-  raise SystemExit(
-    'The Sprint 6 supported-path token --transport-source integrated-runtime is reserved for the Calamum-owned runtime and is not implemented yet. Use --transport-source state-fixture for deterministic review fixtures or --transport-source heimdall-adapter for the historical delegated lane.'
-  )
+  del args
 
 
 def _validate_inspection_inputs(args: argparse.Namespace) -> None:
@@ -674,7 +695,7 @@ def _validate_inspection_inputs(args: argparse.Namespace) -> None:
     )
   if args.transport_source == 'heimdall-adapter':
     raise SystemExit(
-      'Inspect-only workflow currently requires --transport-source state-fixture because adapter-backed runtime traces imply write-side activity.'
+      'Inspect-only workflow uses the supported integrated-runtime or state-fixture review lanes; the Heimdall adapter remains an explicit historical fallback lane only.'
     )
 
 
@@ -685,9 +706,12 @@ def _validate_execution_inputs(args: argparse.Namespace) -> None:
     raise SystemExit(
       'Choose either --execute-flash-plan or --integration-suite, not both.'
     )
-  if args.transport_source != 'heimdall-adapter':
+  if args.transport_source not in (
+    INTEGRATED_RUNTIME_BACKEND,
+    'heimdall-adapter',
+  ):
     raise SystemExit(
-      'Bounded safe-path execution currently requires --transport-source heimdall-adapter so the delegated lower transport remains explicit.'
+      'Bounded safe-path execution requires --transport-source integrated-runtime for the supported path or --transport-source heimdall-adapter for the explicit historical fallback lane.'
     )
 
 
@@ -1160,6 +1184,7 @@ def _run_inspect_only_workflow(
     scenario_name=scenario_name,
     package_assessment=package_assessment,
     pit_inspection=pit_inspection,
+    transport_backend=INTEGRATED_RUNTIME_BACKEND,
     captured_at_utc=captured_at_utc,
   )
 
@@ -1171,6 +1196,11 @@ def _run_execute_flash_plan_workflow(
   """Run the bounded safe-path execution lane and return report plus status."""
 
   _validate_package_inputs(args)
+  transport_backend = (
+    INTEGRATED_RUNTIME_BACKEND
+    if args.transport_source == INTEGRATED_RUNTIME_BACKEND
+    else 'heimdall'
+  )
   (
     base_session,
     package_assessment,
@@ -1181,8 +1211,12 @@ def _run_execute_flash_plan_workflow(
     args.scenario,
     package_fixture_name=args.package_fixture,
     adapter_fixture_name=args.adapter_fixture,
+    transport_backend=transport_backend,
   )
-  reviewed_flash_plan = build_reviewed_flash_plan(package_assessment)
+  if transport_backend == INTEGRATED_RUNTIME_BACKEND:
+    reviewed_flash_plan = build_integrated_reviewed_flash_plan(package_assessment)
+  else:
+    reviewed_flash_plan = build_reviewed_flash_plan(package_assessment)
   execution_rejected = None
   transport_trace = None
 
@@ -1191,14 +1225,24 @@ def _run_execute_flash_plan_workflow(
     return process_result
 
   try:
-    runtime_result = run_bounded_heimdall_flash_session(
-      base_session,
-      reviewed_flash_plan,
-      package_assessment=package_assessment,
-      pit_inspection=pit_inspection,
-      runner=_runner,
-      fixture_name=fixture_name,
-    )
+    if transport_backend == INTEGRATED_RUNTIME_BACKEND:
+      runtime_result = run_integrated_flash_session(
+        base_session,
+        reviewed_flash_plan,
+        package_assessment=package_assessment,
+        pit_inspection=pit_inspection,
+        runner=_runner,
+        fixture_name=fixture_name,
+      )
+    else:
+      runtime_result = run_bounded_heimdall_flash_session(
+        base_session,
+        reviewed_flash_plan,
+        package_assessment=package_assessment,
+        pit_inspection=pit_inspection,
+        runner=_runner,
+        fixture_name=fixture_name,
+      )
     session = runtime_result.session
     transport_trace = runtime_result.trace
   except RuntimeSessionRejected as error:
@@ -1211,6 +1255,7 @@ def _run_execute_flash_plan_workflow(
     package_assessment=package_assessment,
     pit_inspection=pit_inspection,
     transport_trace=transport_trace,
+    transport_backend=transport_backend,
     captured_at_utc=args.captured_at_utc,
     pit_required_for_safe_path=True,
   )
@@ -1260,7 +1305,7 @@ def _run_inspect_only_pit_review(
   """Run bounded PIT inspection for the inspect-only workflow."""
 
   detected_product_code = _inspection_detected_product_code(live_detection)
-  print_trace = execute_heimdall_command(build_print_pit_command_plan())
+  print_trace = execute_integrated_command(build_print_pit_command_plan())
   inspection = build_pit_inspection(
     print_trace,
     detected_product_code=detected_product_code,
@@ -1272,7 +1317,7 @@ def _run_inspect_only_pit_review(
   ):
     return inspection
 
-  download_trace = execute_heimdall_command(
+  download_trace = execute_integrated_command(
     build_download_pit_command_plan(output_path=output_path)
   )
   download_inspection = build_pit_inspection(
@@ -1375,6 +1420,11 @@ def _render_execute_result(
       sort_keys=True,
     )
 
+  boundary = (
+    'Platform supervises the bounded reviewed flash session while integrated-runtime owns the supported-path boundary and delegated lower-transport details remain packaged.'
+    if report.flash_plan.transport_backend == INTEGRATED_RUNTIME_BACKEND
+    else 'Platform supervises the bounded reviewed flash session while Heimdall remains the delegated lower transport lane.'
+  )
   lines = [
     'safe_path_result execution_allowed="{allowed}" session_phase="{phase}" launch_path="{path}" ownership="{ownership}" readiness="{readiness}" transport_state="{transport_state}" summary="{summary}"'.format(
       allowed='yes' if execution_allowed else 'no',
@@ -1385,7 +1435,7 @@ def _render_execute_result(
       transport_state=report.transport.state,
       summary=report.summary,
     ),
-    'safe_path_boundary="Platform supervises the bounded reviewed flash session while Heimdall remains the delegated lower transport lane."',
+    'safe_path_boundary="{boundary}"'.format(boundary=boundary),
   ]
   if execution_rejected is not None:
     lines.append('safe_path_rejected="{reason}"'.format(

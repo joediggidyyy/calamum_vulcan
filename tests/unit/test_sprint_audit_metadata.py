@@ -76,7 +76,7 @@ class SprintAuditMetadataTests(unittest.TestCase):
     }
 
     evidence_text = ' '.join(deviation_map['D-03'].evidence)
-    self.assertIn('0.5.0', evidence_text)
+    self.assertIn('0.6.0', evidence_text)
     self.assertIn('0.3.0', evidence_text)
 
 

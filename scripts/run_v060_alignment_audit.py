@@ -11,6 +11,8 @@ import tomllib
 from collections import Counter
 from dataclasses import asdict
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from typing import Dict
@@ -40,6 +42,8 @@ SPRINT6_CHECKLIST_PATH = DOCS_ROOT / 'Samsung_Android_Flashing_Platform_0.6.0_Ex
 APP_MAIN_PATH = REPO_ROOT / 'calamum_vulcan' / 'app' / '__main__.py'
 APP_DEMO_PATH = REPO_ROOT / 'calamum_vulcan' / 'app' / 'demo.py'
 APP_INTEGRATION_PATH = REPO_ROOT / 'calamum_vulcan' / 'app' / 'integration.py'
+PIT_MODEL_PATH = REPO_ROOT / 'calamum_vulcan' / 'domain' / 'pit' / 'model.py'
+INTEGRATED_RUNTIME_PATH = REPO_ROOT / 'calamum_vulcan' / 'domain' / 'state' / 'integrated_runtime.py'
 SAFE_PATH_MODEL_PATH = REPO_ROOT / 'calamum_vulcan' / 'domain' / 'safe_path' / 'model.py'
 V040_AUDIT_PATH = REPO_ROOT / 'scripts' / 'run_v040_timeline_audit.py'
 
@@ -255,7 +259,7 @@ def _run_execute_probe(
     'calamum_vulcan.app',
     '--execute-flash-plan',
     '--transport-source',
-    'heimdall-adapter',
+    'integrated-runtime',
     '--scenario',
     scenario,
     '--control-format',
@@ -310,6 +314,8 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
   app_main_text = context['app_main_text']
   demo_text = context['demo_text']
   integration_text = context['integration_text']
+  pit_model_text = context['pit_model_text']
+  integrated_runtime_text = context['integrated_runtime_text']
   safe_path_text = context['safe_path_text']
   v040_audit_text = context['v040_audit_text']
   sprint6_execution_surface_text = context['sprint6_execution_surface_text']
@@ -328,8 +334,10 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
   orchestration_close = bundles['orchestration-close']
   read_side_close = bundles['read-side-close']
   safe_path_close = bundles['safe-path-close']
+  autonomy_close = bundles['autonomy-close']
   read_side_scenarios = _scenario_map(read_side_close)
   safe_path_scenarios = _scenario_map(safe_path_close)
+  autonomy_close_scenarios = _scenario_map(autonomy_close)
   support_contract_markers = (
     'detect -> PIT -> package-aligned execution -> transcript/evidence -> recovery/resume',
     '`integrated-runtime`',
@@ -357,6 +365,22 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     s6_01_status = 'implemented'
 
   safe_path_ready_live_source = safe_path_scenarios['safe-path-ready-review']['live_source']
+  safe_path_runtime_source = safe_path_scenarios['safe-path-runtime-complete']['transport_source']
+  execute_ready_adapter = execute_ready_control['transport']['adapter_name']
+  execute_ready_evidence_adapter = execute_ready_evidence['transport']['adapter_name']
+  supported_execute_help = _contains(
+    cli_help,
+    '--transport-source integrated-runtime',
+  )
+  integrated_pit_semantics_closed = (
+    'INTEGRATED_RUNTIME_PRINT_PIT' in pit_model_text
+    and 'INTEGRATED_RUNTIME_DOWNLOAD_PIT' in pit_model_text
+    and 'execute_integrated_command' in app_main_text
+  )
+  integrated_runtime_boundary_closed = (
+    'run_integrated_flash_session' in app_main_text
+    and 'project_heimdall_trace_to_integrated_runtime' in integrated_runtime_text
+  )
   shared_cli_native_usb_closed = (
     'VulcanUSBScanner' in app_main_text
     and 'build_usb_live_detection_session' in app_main_text
@@ -366,6 +390,55 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
   s6_02_status = 'partial'
   if safe_path_ready_live_source == 'usb' and shared_cli_native_usb_closed:
     s6_02_status = 'implemented'
+
+  s5_02_status = 'open'
+  if (
+    integrated_runtime_token_present
+    or safe_path_runtime_source == 'integrated-runtime'
+    or supported_execute_help
+  ):
+    s5_02_status = 'partial'
+  if (
+    safe_path_runtime_source == 'integrated-runtime'
+    and execute_ready_adapter == 'integrated-runtime'
+    and supported_execute_help
+  ):
+    s5_02_status = 'implemented'
+
+  s6_03_status = 'partial'
+  if (
+    safe_path_runtime_source == 'integrated-runtime'
+    and execute_ready_adapter == 'integrated-runtime'
+    and execute_ready_evidence_adapter == 'integrated-runtime'
+    and supported_execute_help
+    and integrated_pit_semantics_closed
+    and integrated_runtime_boundary_closed
+  ):
+    s6_03_status = 'implemented'
+
+  autonomy_ready_review = autonomy_close_scenarios['supported-path-ready-review']
+  autonomy_runtime_complete = autonomy_close_scenarios['integrated-runtime-complete']
+  autonomy_runtime_failure = autonomy_close_scenarios['integrated-runtime-failure-review']
+  autonomy_runtime_resume = autonomy_close_scenarios['integrated-runtime-resume-review']
+  autonomy_fallback_boundary = autonomy_close_scenarios['fastboot-fallback-boundary-review']
+  autonomy_quarantine_closed = (
+    autonomy_close['suite_name'] == 'autonomy-close'
+    and autonomy_ready_review['transport_source'] == 'integrated-runtime'
+    and autonomy_ready_review['pit_source'] == 'integrated_runtime_print_pit'
+    and autonomy_ready_review['live_source'] == 'usb'
+    and autonomy_runtime_complete['transport_source'] == 'integrated-runtime'
+    and autonomy_runtime_complete['transport_state'] == 'completed'
+    and autonomy_runtime_complete['transcript_preserved']
+    and autonomy_runtime_failure['transport_source'] == 'integrated-runtime'
+    and autonomy_runtime_failure['transport_state'] == 'failed'
+    and autonomy_runtime_failure['transcript_preserved']
+    and autonomy_runtime_resume['transport_source'] == 'integrated-runtime'
+    and autonomy_runtime_resume['transport_state'] == 'completed'
+    and autonomy_runtime_resume['transcript_preserved']
+    and autonomy_fallback_boundary['live_source'] == 'fastboot'
+    and autonomy_fallback_boundary['transport_state'] == 'not_invoked'
+  )
+  s6_04_status = 'implemented' if autonomy_quarantine_closed else 'partial'
 
   criteria = [
     CriterionResult(
@@ -453,22 +526,30 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     CriterionResult(
       sprint='0.5.0',
       criterion_id='S5-02',
-      title='Integrated Samsung extraction is still materially incomplete at Sprint 5 scope',
-      status='open',
+      title='The old Sprint 5 supported-path extraction gap is now materially closed in live code',
+      status=s5_02_status,
       priority='critical',
-      impact='Even under the updated roadmap, Sprint 5 cannot close honestly if the critical native Samsung seams are still missing.',
+      impact='The former Sprint 5 extraction gap no longer blocks the live codebase; Sprint 6 can now focus on quarantine and autonomy closeout rather than still chasing the old external-adapter prerequisite.',
       evidence=(
         'Available transport sources remain `{sources}`.'.format(
           sources='`, `'.join(transport_sources),
         ),
-        'The `safe-path-runtime-complete` scenario still runs with transport source `{source}`.'.format(
-          source=safe_path_scenarios['safe-path-runtime-complete']['transport_source'],
+        'The `safe-path-runtime-complete` scenario now runs with transport source `{source}`.'.format(
+          source=safe_path_runtime_source,
         ),
-        'CLI execution still says `Bounded safe-path execution currently requires --transport-source heimdall-adapter so the delegated lower transport remains explicit.`',
+        'CLI execution help now documents `--transport-source integrated-runtime` as the Sprint 6 supported path while retaining `heimdall-adapter` only as the explicit historical fallback lane.',
       ),
       next_actions=(
-        'Land Calamum-owned supported-path seams for Samsung download-mode detect, PIT acquisition, and write execution.',
-        'Keep external Heimdall visible only as bounded fallback, migration aid, or regression oracle while Sprint 5 extraction closes, and allow embedded Heimdall-derived transport reuse where it preserves functionality without remaining an operator-visible dependency.',
+        ()
+        if s5_02_status == 'implemented'
+        else (
+          'Finish moving supported-path proof surfaces and closeout bundles onto `integrated-runtime` so the old Sprint 5 extraction gap is closed everywhere, not only in the primary execute lane.',
+        )
+      ),
+      notes=(
+        ('This no longer means Sprint 5 is the active lane; it means the old external-adapter dependency that kept Sprint 5 open is now materially gone from the supported path.',)
+        if s5_02_status == 'implemented'
+        else ()
       ),
     ),
     CriterionResult(
@@ -499,7 +580,7 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
       impact='The final autonomy push now has one explicit meaning for the supported runtime and one bounded blocker list, which prevents Sprint 6 execution from drifting into another discovery loop.',
       evidence=(
         'The Sprint 6 execution surface now freezes the supported path as `detect -> PIT -> package-aligned execution -> transcript/evidence -> recovery/resume` with no required external Heimdall installation or standalone Heimdall CLI.',
-        'Transport-source contract tokens now read `{sources}`, with `integrated-runtime` reserved as the canonical supported-path token while `heimdall-adapter` remains the explicit historical delegated lane.'.format(
+        'Transport-source contract tokens now read `{sources}`, with `integrated-runtime` established as the canonical supported-path token while `heimdall-adapter` remains the explicit historical delegated lane.'.format(
           sources='`, `'.join(transport_sources),
         ),
         'The Sprint 6 checklist now records a current blocker inventory for `S6-02` through `S6-04` rather than leaving the opening stack as unbounded discovery.',
@@ -535,7 +616,7 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
         )
       ),
       notes=(
-        ('FS6-02 closes the supported-path detect/identity blocker while PIT and write/runtime closure remain in `S6-03` and `S6-04`.' ,)
+        ('FS6-02 closes the supported-path detect/identity blocker while the remaining closeout work narrows to downstream transport-proof and fallback-quarantine discipline.',)
         if s6_02_status == 'implemented'
         else ('This is real partial progress, not a green final-frame closeout.',)
       ),
@@ -543,43 +624,75 @@ def _build_criteria(context: Mapping[str, Any]) -> Tuple[CriterionResult, ...]:
     CriterionResult(
       sprint='0.6.0',
       criterion_id='S6-03',
-      title='PIT retrieval is only partially autonomous even though PIT truth is repo-owned',
-      status='partial',
+      title='Supported-path PIT retrieval, execution, and recovery now close through the integrated runtime boundary',
+      status=s6_03_status,
       priority='high',
-      impact='The platform already owns PIT interpretation and alignment policy, but still relies on an external Heimdall-backed path to retrieve the live PIT data used by the supported Samsung path.',
+      impact='Sprint 6 can now treat PIT acquisition, bounded execution, transcript retention, and recovery/resume as one supported integrated-runtime lane rather than a split review shell sitting on top of an external operator-visible adapter boundary.',
       evidence=(
-        'The `native-adb-package-review` scenario keeps PIT state `{state}` with package alignment `{alignment}`.'.format(
-          state=read_side_scenarios['native-adb-package-review']['pit_state'],
-          alignment=read_side_scenarios['native-adb-package-review']['pit_package_alignment'],
+        'The `safe-path-runtime-complete` scenario now reports transport source `{source}`.'.format(
+          source=safe_path_runtime_source,
         ),
-        'The CLI main surface still imports `build_print_pit_command_plan` and `build_download_pit_command_plan` from `adapters.heimdall`.',
-        'The safe-path ready review now starts from native USB download-mode identity, but bounded PIT capture still runs through Heimdall-backed print-pit / download-pit seams.',
+        'The ready execute control/evidence probes now serialize transport adapter `{control_adapter}` / `{evidence_adapter}`.'.format(
+          control_adapter=execute_ready_adapter,
+          evidence_adapter=execute_ready_evidence_adapter,
+        ),
+        'The PIT model now defines `INTEGRATED_RUNTIME_PRINT_PIT` / `INTEGRATED_RUNTIME_DOWNLOAD_PIT`, and the CLI main surface now routes supported-path PIT and execute flows through `execute_integrated_command(...)` / `run_integrated_flash_session(...)`.',
       ),
       next_actions=(
-        'Introduce a Calamum-owned integrated PIT acquisition path for the supported Samsung matrix while preserving the current repo-owned comparison/alignment contract.',
+        ()
+        if s6_03_status == 'implemented'
+        else (
+          'Finish moving the remaining supported-path proof surfaces onto the integrated runtime and keep operator-visible Heimdall dependence out of PIT and execute flows.',
+        )
+      ),
+      notes=(
+        ('Embedded or packaged Heimdall-derived lower-transport reuse remains acceptable here only because the supported operator-facing boundary is now `integrated-runtime`, not an external Heimdall prerequisite.',)
+        if s6_03_status == 'implemented'
+        else ()
       ),
     ),
     CriterionResult(
       sprint='0.6.0',
       criterion_id='S6-04',
-      title='Runtime governance and evidence are platform-owned, but live transfer autonomy is only partial',
-      status='partial',
+      title='Fallback quarantine and historical Heimdall separation remain the active Sprint 6 closeout slice',
+      status=s6_04_status,
       priority='high',
-      impact='The final frame can preserve current governance, progress, transcript, and reporting contracts, but the live write engine underneath them is still externally Heimdall-backed.',
+      impact=(
+        'The supported path now runs through `integrated-runtime`, and the remaining Sprint 6 work narrows to freeze/readiness/handoff surfaces because the fallback quarantine line is now materially explicit.'
+        if s6_04_status == 'implemented'
+        else 'The supported path now runs through `integrated-runtime`, but Sprint 6 still needs a cleaner quarantine line between supported-path proof and the explicit historical Heimdall fallback/oracle surfaces.'
+      ),
       evidence=(
-        'Ready execute evidence preserves the platform governance line `[SAFE-PATH] governance=platform_supervised ...`.',
-        'Ready execute evidence preserves authority ownership `{owner}` and transport state `{state}`.'.format(
-          owner=execute_ready_evidence['authority']['ownership'],
-          state=execute_ready_evidence['transport']['state'],
+        'The `autonomy-close` bundle now records supported-path ready review as transport source `{ready_source}` with PIT source `{pit_source}` and live source `{live_source}`.'.format(
+          ready_source=autonomy_ready_review['transport_source'],
+          pit_source=autonomy_ready_review['pit_source'],
+          live_source=autonomy_ready_review['live_source'],
         ),
-        'Blocked execute control still shows `execution_allowed={allowed}` with transport state `{state}` before invocation.'.format(
-          allowed=execute_blocked_control['execution_allowed'],
-          state=execute_blocked_control['transport']['state'],
+        'Integrated-runtime closeout lanes now preserve transport states `{complete}` / `{failure}` / `{resume}` with transcript preservation `{complete_tx}` / `{failure_tx}` / `{resume_tx}`.'.format(
+          complete=autonomy_runtime_complete['transport_state'],
+          failure=autonomy_runtime_failure['transport_state'],
+          resume=autonomy_runtime_resume['transport_state'],
+          complete_tx=autonomy_runtime_complete['transcript_preserved'],
+          failure_tx=autonomy_runtime_failure['transcript_preserved'],
+          resume_tx=autonomy_runtime_resume['transcript_preserved'],
+        ),
+        'Fallback quarantine remains explicit because the fastboot boundary review still reports live source `{source}` with transport state `{state}` outside the integrated-runtime proof lane.'.format(
+          source=autonomy_fallback_boundary['live_source'],
+          state=autonomy_fallback_boundary['transport_state'],
         ),
       ),
       next_actions=(
-        'Keep the current safe-path governance/evidence shell, but replace the externally Heimdall-backed transfer runner with a Calamum-owned integrated Samsung runtime.',
-        'Re-prove resume/progress/transcript behavior through an integrated-runtime closeout bundle.',
+        ()
+        if s6_04_status == 'implemented'
+        else (
+          'Move the remaining supported-path proof wording and closeout bundles onto `integrated-runtime` where they still speak in pre-FS6-03 adapter terms.',
+          'Keep `heimdall-adapter` visible only as an explicit fallback, oracle, migration, or historical lane rather than flattening it into the supported-path promise.',
+        )
+      ),
+      notes=(
+        ('The new `autonomy-close` bundle is the active Sprint 6 closeout surface; lower-sprint bundles remain historical evidence only.',)
+        if s6_04_status == 'implemented'
+        else ()
       ),
     ),
     CriterionResult(
@@ -608,12 +721,12 @@ def _build_opportunistic_finds(context: Mapping[str, Any]) -> Tuple[Finding, ...
   return (
     Finding(
       finding_id='X-01',
-      title='Executable closeout bundles already exist through Sprint 4',
+      title='Executable closeout bundles already exist through Sprint 6',
       severity='medium',
       category='foundation',
       summary='The final-frame stack can inherit real execution/evidence surfaces instead of planning from a blank slate.',
       evidence=(
-        'CLI help still exposes `--integration-suite`, and the audit generated `sprint-close`, `orchestration-close`, `read-side-close`, and `safe-path-close` directly from the live CLI.',
+        'CLI help still exposes `--integration-suite`, and the audit generated `sprint-close`, `orchestration-close`, `read-side-close`, `safe-path-close`, and `autonomy-close` directly from the live CLI.',
       ),
     ),
     Finding(
@@ -641,7 +754,7 @@ def _build_opportunistic_finds(context: Mapping[str, Any]) -> Tuple[Finding, ...
 
 
 def _build_deviations(context: Mapping[str, Any]) -> Tuple[Finding, ...]:
-  current_repository_version = str(context.get('current_repository_version', '0.5.0'))
+  current_repository_version = str(context.get('current_repository_version', '0.6.0'))
   public_stable_version = str(context.get('public_stable_version', '0.3.0'))
   return (
     Finding(
@@ -917,7 +1030,7 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
   )
   parser.add_argument(
     '--captured-at-utc',
-    default='2026-04-21T00:00:00Z',
+    default=(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')),
     help='Timestamp string recorded in the top-level audit report.',
   )
   return parser.parse_args(argv)
@@ -941,6 +1054,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
   app_main_text = _read_text(APP_MAIN_PATH)
   demo_text = _read_text(APP_DEMO_PATH)
   integration_text = _read_text(APP_INTEGRATION_PATH)
+  pit_model_text = _read_text(PIT_MODEL_PATH)
+  integrated_runtime_text = _read_text(INTEGRATED_RUNTIME_PATH)
   safe_path_text = _read_text(SAFE_PATH_MODEL_PATH)
   v040_audit_text = _read_text(V040_AUDIT_PATH)
   sprint5_doc_matches = _doc_matches('*0.5.0*.md')
@@ -955,7 +1070,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
   bundles = {}
   bundle_markdown = {}
-  for suite_name in ('sprint-close', 'orchestration-close', 'read-side-close', 'safe-path-close'):
+  for suite_name in (
+    'sprint-close',
+    'orchestration-close',
+    'read-side-close',
+    'safe-path-close',
+    'autonomy-close',
+  ):
     bundle_payload, markdown_text, captures = _run_integration_bundle(suite_name, raw_root)
     bundles[suite_name] = bundle_payload
     bundle_markdown[suite_name] = markdown_text
@@ -1006,6 +1127,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     },
     'safe_path_ready_review': _scenario_map(bundles['safe-path-close'])['safe-path-ready-review'],
     'safe_path_runtime_complete': _scenario_map(bundles['safe-path-close'])['safe-path-runtime-complete'],
+    'autonomy_ready_review': _scenario_map(bundles['autonomy-close'])['supported-path-ready-review'],
+    'autonomy_runtime_complete': _scenario_map(bundles['autonomy-close'])['integrated-runtime-complete'],
     'native_adb_package_review': _scenario_map(bundles['read-side-close'])['native-adb-package-review'],
     'fastboot_fallback_review': _scenario_map(bundles['read-side-close'])['fastboot-fallback-review'],
     'execute_ready_control': execute_ready_control,
@@ -1032,6 +1155,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     'app_main_text': app_main_text,
     'demo_text': demo_text,
     'integration_text': integration_text,
+    'pit_model_text': pit_model_text,
+    'integrated_runtime_text': integrated_runtime_text,
     'safe_path_text': safe_path_text,
     'v040_audit_text': v040_audit_text,
     'cli_help': cli_help,

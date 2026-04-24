@@ -4,13 +4,53 @@
 **Status**: Public change history  
 **Owner**: ORACL-Prime  
 **Project**: Calamum Vulcan  
-**Last updated**: 2026-04-22
+**Last updated**: 2026-04-23
 
 ---
 
 <p align="center">
   <img src="calamum_vulcan/assets/branding/calamum_vulcan_logo.png" alt="Calamum Vulcan Logo" width="200">
 </p>
+
+## 0.6.0 - 2026-04-23
+
+Local package-only Sprint 6 autonomy boundary, sealing the first integrated-runtime Samsung flashing candidate while keeping public promotion deferred to the immediate post-`0.6.0` `1.0.0` gate.
+
+### Added
+
+- the deterministic `autonomy-close` integration bundle for Sprint 6 fallback-quarantine and autonomy-close proof
+- the dedicated Sprint 6 readiness runner and supporting readiness docs for the package-only `0.6.0` freeze
+- expanded CLI and regression coverage for the new Sprint 6 bundle surface and integrated-runtime proof lanes
+- a dedicated Sprint 6 live empirical preflight runner at `scripts/run_fs6_live_empirical_review.py` that writes manual-review readiness summaries under `temp/fs6_live_empirical/`
+- a Calamum-owned packaged Heimdall CLI payload under `calamum_vulcan/assets/bin/windows/heimdall/` for the Windows supported-path runtime lane
+
+### Changed
+
+- repository package metadata now targets the local `0.6.0` package-only Sprint 6 autonomy boundary while the latest public stable release remains `0.3.0`
+- installed-artifact, scripted-simulation, empirical-review, and alignment-audit proof surfaces now treat `integrated-runtime` as the supported Sprint 6 lane and keep historical Heimdall paths explicitly quarantined
+- Sprint 6 authority surfaces now separate the completed `FS6-04` quarantine cleanup from the remaining freeze/readiness and promotion-handoff work
+- Windows Heimdall runtime resolution now prefers the packaged repo-owned asset before PATH/common install locations and emits explicit missing-DLL guidance when the bundled runtime cannot start
+
+### Validated
+
+- the `autonomy-close` bundle, CLI integration-suite surface, scripted simulation contract, and Sprint 6 audit metadata guards passed focused regression validation
+- the Sprint 6 readiness archive is owned by `scripts/run_v060_readiness_stack.py`
+- the Sprint 6 alignment audit remains available through `scripts/run_v060_alignment_audit.py`
+
+### Release-boundary status
+
+- current local package boundary: `0.6.0` package-ready autonomy candidate with validated local wheel and sdist targets
+- current latest sealed repository-visible sprint tag boundary: `v0.4.0`
+- latest stable GitHub/PyPI release: `0.3.0`
+- renewed TestPyPI/PyPI publication remains deferred to the immediate post-`0.6.0` `1.0.0` promotion gate
+
+### Known limitations
+
+- Windows remains the only empirically reviewed packaged host for the local `0.6.0` boundary
+- Linux packaged validation remains scripted / installed-artifact only pending broader empirical review
+- Qt font packaging still emits a non-blocking warning in some environments
+- the current official upstream Heimdall Windows bundle is 32-bit and can still require the Microsoft Visual C++ 2012 x86 runtime on a fresh workstation before the packaged supported-path payload can execute
+- warning-tier checksum placeholder debt remains in legacy fixture manifests
 
 ## 0.5.0 - 2026-04-23
 

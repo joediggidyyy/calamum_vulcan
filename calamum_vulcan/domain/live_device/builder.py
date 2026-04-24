@@ -208,6 +208,10 @@ def build_usb_live_detection_session(
     detection_state = LiveDetectionState.FAILED
     if probe_result.state == 'cleared':
       detection_state = LiveDetectionState.CLEARED
+    next_operator_action = _usb_probe_next_action(
+      probe_result,
+      detection_state,
+    )
     return LiveDetectionSession(
       state=detection_state,
       summary=probe_result.summary,
@@ -224,6 +228,10 @@ def build_usb_live_detection_session(
         LiveFallbackPosture.NOT_NEEDED,
         None,
         detection_state=detection_state,
+        extra_notes=_usb_probe_extra_notes(
+          probe_result,
+          next_operator_action,
+        ),
       ),
     )
 
@@ -231,6 +239,11 @@ def build_usb_live_detection_session(
   detection_state = LiveDetectionState.DETECTED
   if probe_result.state == 'attention' or not snapshot.command_ready:
     detection_state = LiveDetectionState.ATTENTION
+  next_operator_action = _usb_probe_next_action(
+    probe_result,
+    detection_state,
+    snapshot=snapshot,
+  )
 
   return LiveDetectionSession(
     state=detection_state,
@@ -257,8 +270,56 @@ def build_usb_live_detection_session(
       None,
       snapshot,
       detection_state,
+      extra_notes=_usb_probe_extra_notes(
+        probe_result,
+        next_operator_action,
+      ),
     ),
   )
+
+
+def _usb_probe_next_action(
+  probe_result: USBProbeResult,
+  detection_state: LiveDetectionState,
+  snapshot: Optional[LiveDeviceSnapshot] = None,
+) -> Optional[str]:
+  """Return the primary operator next step for one native USB probe."""
+
+  if probe_result.remediation_command is not None:
+    return 'Allow the packaged USB remediation helper to finish, then rerun Detect device.'
+  if (
+    detection_state == LiveDetectionState.DETECTED
+    and snapshot is not None
+    and snapshot.support_posture == LiveDeviceSupportPosture.IDENTITY_INCOMPLETE
+  ):
+    return 'Run Read PIT next to gather bounded partition truth and narrow the active device identity.'
+  if detection_state == LiveDetectionState.ATTENTION:
+    if snapshot is not None and snapshot.support_posture == LiveDeviceSupportPosture.IDENTITY_INCOMPLETE:
+      return 'Confirm the direct USB access path so product identity can be read, then rerun Detect device.'
+    return 'Confirm the USB access path, then rerun Detect device so the download-mode session can become command-ready.'
+  if detection_state == LiveDetectionState.FAILED:
+    return 'Confirm the native USB backend and access path, then rerun Detect device.'
+  if detection_state == LiveDetectionState.CLEARED:
+    return 'Reconnect the device in Samsung download mode, then rerun Detect device.'
+  return None
+
+
+def _usb_probe_extra_notes(
+  probe_result: USBProbeResult,
+  next_operator_action: Optional[str],
+) -> Tuple[str, ...]:
+  """Return remediation-first notes for one native USB probe result."""
+
+  notes = []  # type: list[str]
+  if probe_result.remediation_command is not None:
+    notes.append(
+      'Self-heal attempted: {command}'.format(
+        command=probe_result.remediation_command,
+      )
+    )
+  if next_operator_action is not None:
+    notes.append('Next step: {action}'.format(action=next_operator_action))
+  return tuple(notes)
 
 
 def _first_heimdall_device_payload(
@@ -1090,8 +1151,10 @@ def _detection_notes(
   fallback_reason: Optional[str],
   snapshot: Optional[LiveDeviceSnapshot] = None,
   detection_state: Optional[LiveDetectionState] = None,
+  extra_notes: Tuple[str, ...] = (),
 ) -> Tuple[str, ...]:
-  collected = list(notes)
+  collected = list(extra_notes)
+  collected.extend(notes)
   if detection_state == LiveDetectionState.ATTENTION:
     collected.append(
       'Live device presence is real, but command-ready control is not yet established.'

@@ -53,20 +53,8 @@ def build_pit_inspection(
 ) -> PitInspection:
   """Normalize one Heimdall PIT trace into repo-owned inspection truth."""
 
-  operation = trace.command_plan.operation
-  if operation == HeimdallOperation.PRINT_PIT:
-    source = PitSource.HEIMDALL_PRINT_PIT
-  elif operation == HeimdallOperation.DOWNLOAD_PIT:
-    source = PitSource.HEIMDALL_DOWNLOAD_PIT
-  else:
-    raise ValueError(
-      'PIT inspection requires Heimdall print-pit or download-pit output.'
-    )
-
-  fallback_reason = (
-    'PIT acquisition currently depends on the Heimdall adapter while '
-    'repo-owned PIT parsing and inspection mature.'
-  )
+  source = _pit_source_for_trace(trace)
+  fallback_reason = _fallback_reason_for_source(source)
   if trace.state == HeimdallTraceState.FAILED:
     return _compose_inspection(
       state=PitInspectionState.FAILED,
@@ -76,10 +64,7 @@ def build_pit_inspection(
       observed_pit_fingerprint=None,
       package_assessment=package_assessment,
       fallback_reason=fallback_reason,
-      summary=(
-        'Heimdall PIT acquisition failed before repo-owned PIT inspection '
-        'could begin.'
-      ),
+      summary=_pit_failure_summary(trace, source),
       download_path=_command_output_path(trace),
       entry_count=0,
       partition_names=(),
@@ -90,6 +75,16 @@ def build_pit_inspection(
   if source == PitSource.HEIMDALL_PRINT_PIT:
     return _build_from_print_trace(
       trace,
+      source=source,
+      detected_product_code=detected_product_code,
+      package_assessment=package_assessment,
+      fallback_reason=fallback_reason,
+    )
+
+  if source == PitSource.INTEGRATED_RUNTIME_PRINT_PIT:
+    return _build_from_print_trace(
+      trace,
+      source=source,
       detected_product_code=detected_product_code,
       package_assessment=package_assessment,
       fallback_reason=fallback_reason,
@@ -97,6 +92,7 @@ def build_pit_inspection(
 
   return _build_from_download_trace(
     trace,
+    source=source,
     detected_product_code=detected_product_code,
     package_assessment=package_assessment,
     fallback_reason=fallback_reason,
@@ -105,6 +101,7 @@ def build_pit_inspection(
 
 def _build_from_print_trace(
   trace: HeimdallNormalizedTrace,
+  source: PitSource,
   detected_product_code: Optional[str],
   package_assessment: Optional[PackageManifestAssessment],
   fallback_reason: str,
@@ -142,7 +139,7 @@ def _build_from_print_trace(
       notes.append('No PIT partition rows could be parsed from Heimdall print-pit output.')
     return _compose_inspection(
       state=PitInspectionState.MALFORMED,
-      source=PitSource.HEIMDALL_PRINT_PIT,
+      source=source,
       detected_product_code=detected_product_code,
       observed_product_code=(
         metadata_match.group('product_code') if metadata_match is not None else None
@@ -153,9 +150,9 @@ def _build_from_print_trace(
       package_assessment=package_assessment,
       fallback_reason=fallback_reason,
       summary=(
-        'PIT output was captured through the Heimdall print-pit path, but '
+        'PIT output was captured through {path}, but '
         'it did not satisfy the repo-owned parser contract.'
-      ),
+      ).format(path=_source_path_label(source)),
       download_path=None,
       entry_count=len(entries),
       partition_names=tuple(entry.partition_name for entry in entries),
@@ -177,13 +174,14 @@ def _build_from_print_trace(
   )
   return _compose_inspection(
     state=state,
-    source=PitSource.HEIMDALL_PRINT_PIT,
+    source=source,
     detected_product_code=detected_product_code,
     observed_product_code=metadata_match.group('product_code'),
     observed_pit_fingerprint=metadata_match.group('fingerprint'),
     package_assessment=package_assessment,
     fallback_reason=fallback_reason,
     summary=_summary_for_print_capture(
+      source=source,
       state=state,
       observed_product_code=metadata_match.group('product_code'),
       observed_pit_fingerprint=metadata_match.group('fingerprint'),
@@ -199,8 +197,92 @@ def _build_from_print_trace(
   )
 
 
+def _pit_failure_summary(
+  trace: HeimdallNormalizedTrace,
+  source: PitSource,
+) -> str:
+  """Return one operator-facing PIT failure summary with the best reason."""
+
+  summary = (
+    '{source_label} PIT acquisition failed before repo-owned PIT inspection '
+    'could begin.'
+  ).format(source_label=_pit_failure_source_label(source))
+  detail = _pit_failure_detail(trace)
+  if detail is None:
+    return summary
+  return '{summary} Reason: {detail}'.format(
+    summary=summary,
+    detail=_terminal_sentence(detail),
+  )
+
+
+def _pit_failure_source_label(source: PitSource) -> str:
+  """Return the operator label for one failed PIT acquisition source."""
+
+  if source in (
+    PitSource.INTEGRATED_RUNTIME_PRINT_PIT,
+    PitSource.INTEGRATED_RUNTIME_DOWNLOAD_PIT,
+  ):
+    return 'Supported-path'
+  return 'Heimdall'
+
+
+def _pit_failure_detail(trace: HeimdallNormalizedTrace) -> Optional[str]:
+  """Return the most specific failure detail carried by one normalized trace."""
+
+  ignored_prefixes = (
+    'Calamum integrated runtime owns',
+    'Delegated lower-transport internals remain packaged',
+    'Delegated lower-transport command:',
+  )
+  for note in trace.notes:
+    candidate = str(note).strip()
+    if not candidate:
+      continue
+    if any(candidate.startswith(prefix) for prefix in ignored_prefixes):
+      continue
+    return _normalized_failure_detail(candidate)
+  for line in trace.stderr_lines:
+    candidate = str(line).strip()
+    if candidate:
+      return _normalized_failure_detail(candidate)
+  for line in trace.stdout_lines:
+    candidate = str(line).strip()
+    if candidate and 'error' in candidate.lower():
+      return _normalized_failure_detail(candidate)
+  return None
+
+
+def _normalized_failure_detail(value: str) -> str:
+  """Return one operator-facing PIT failure detail without raw transport noise."""
+
+  candidate = value.strip()
+  lowered = candidate.lower()
+  disconnect_markers = (
+    'no longer connected',
+    'device disconnected',
+    'device has been disconnected',
+    'failed to open usb device',
+  )
+  if any(marker in lowered for marker in disconnect_markers):
+    return 'The supported-path transport lost access to the Samsung download-mode interface during PIT acquisition'
+  return candidate
+
+
+def _terminal_sentence(value: str) -> str:
+  """Return one sentence-like value with terminal punctuation."""
+
+  trimmed = value.strip()
+  if not trimmed:
+    return ''
+  if trimmed.endswith(('.', '!', '?')):
+    return trimmed
+  return trimmed + '.'
+
+
 def _build_from_download_trace(
   trace: HeimdallNormalizedTrace,
+  source: PitSource,
   detected_product_code: Optional[str],
   package_assessment: Optional[PackageManifestAssessment],
   fallback_reason: str,
@@ -218,16 +300,16 @@ def _build_from_download_trace(
     notes.append('PIT download output did not satisfy the repo-owned metadata parser.')
     return _compose_inspection(
       state=PitInspectionState.MALFORMED,
-      source=PitSource.HEIMDALL_DOWNLOAD_PIT,
+      source=source,
       detected_product_code=detected_product_code,
       observed_product_code=None,
       observed_pit_fingerprint=None,
       package_assessment=package_assessment,
       fallback_reason=fallback_reason,
       summary=(
-        'PIT download output completed, but the repo-owned metadata parser '
+        'PIT download output completed through {path}, but the repo-owned metadata parser '
         'could not extract trustworthy PIT facts.'
-      ),
+      ).format(path=_source_path_label(source)),
       download_path=output_path,
       entry_count=0,
       partition_names=(),
@@ -240,16 +322,16 @@ def _build_from_download_trace(
   )
   return _compose_inspection(
     state=PitInspectionState.PARTIAL,
-    source=PitSource.HEIMDALL_DOWNLOAD_PIT,
+    source=source,
     detected_product_code=detected_product_code,
     observed_product_code=metadata_match.group('product_code'),
     observed_pit_fingerprint=metadata_match.group('fingerprint'),
     package_assessment=package_assessment,
     fallback_reason=fallback_reason,
     summary=(
-      'PIT acquisition metadata was captured through the Heimdall download-pit '
+      'PIT acquisition metadata was captured through {path}, but '
       'path, but detailed partition inspection still requires print-pit output.'
-    ),
+    ).format(path=_source_path_label(source)),
     download_path=metadata_match.group('output') or output_path,
     entry_count=int(metadata_match.group('entry_count')),
     partition_names=(),
@@ -318,6 +400,7 @@ def _compose_inspection(
 
 
 def _summary_for_print_capture(
+  source: PitSource,
   state: PitInspectionState,
   observed_product_code: Optional[str],
   observed_pit_fingerprint: Optional[str],
@@ -333,17 +416,19 @@ def _summary_for_print_capture(
   )
   summary = (
     'Repo-owned PIT inspection captured {count} partition rows for {device} '
-    'through the Heimdall print-pit path.'.format(
+    'through {path}.'.format(
       count=entry_count,
       device=device_label,
+      path=_source_path_label(source),
     )
   )
   if state == PitInspectionState.PARTIAL:
     summary = (
       'Repo-owned PIT inspection partially parsed {count} partition rows for '
-      '{device} through the Heimdall print-pit path.'.format(
+      '{device} through {path}.'.format(
         count=entry_count,
         device=device_label,
+        path=_source_path_label(source),
       )
     )
   package_alignment = PitPackageAlignment.NOT_REVIEWED
@@ -417,16 +502,31 @@ def _operator_guidance(
   device_alignment: PitDeviceAlignment,
   registry_match_kind: str,
 ) -> Tuple[str, ...]:
+  integrated_source = source in (
+    PitSource.INTEGRATED_RUNTIME_PRINT_PIT,
+    PitSource.INTEGRATED_RUNTIME_DOWNLOAD_PIT,
+  )
   guidance = [
     'Treat observed PIT truth as read-side inspection only; it does not imply flash readiness.',
-    'PIT acquisition currently depends on the Heimdall adapter while repo-owned PIT parsing and inspection mature.',
+    (
+      'PIT acquisition runs through the supported path while repo-owned PIT parsing and inspection remain authoritative.'
+      if integrated_source
+      else 'PIT acquisition currently depends on the Heimdall adapter while repo-owned PIT parsing and inspection mature.'
+    ),
   ]
-  if source == PitSource.HEIMDALL_DOWNLOAD_PIT:
+  if source in (
+    PitSource.HEIMDALL_DOWNLOAD_PIT,
+    PitSource.INTEGRATED_RUNTIME_DOWNLOAD_PIT,
+  ):
     guidance.append('Detailed partition inspection currently requires print-pit; download-pit is metadata-only in this slice.')
   if state == PitInspectionState.MALFORMED:
     guidance.append('Do not rely on this PIT result until malformed PIT output is resolved.')
   elif state == PitInspectionState.FAILED:
-    guidance.append('Re-run PIT acquisition only after the Heimdall adapter failure is understood and bounded.')
+    guidance.append(
+      'Re-run PIT acquisition only after the supported-path PIT failure is understood and bounded.'
+      if integrated_source
+      else 'Re-run PIT acquisition only after the Heimdall adapter failure is understood and bounded.'
+    )
   elif state == PitInspectionState.PARTIAL:
     guidance.append('Keep PIT review bounded until metadata and partition rows agree fully.')
 
@@ -456,6 +556,53 @@ def _command_output_path(trace: HeimdallNormalizedTrace) -> Optional[str]:
   if output_index + 1 >= len(arguments):
     return None
   return arguments[output_index + 1]
+
+
+def _pit_source_for_trace(trace: HeimdallNormalizedTrace) -> PitSource:
+  """Return the PIT source semantics that match the current trace boundary."""
+
+  operation = trace.command_plan.operation
+  adapter_name = getattr(trace, 'adapter_name', 'heimdall')
+  if operation == HeimdallOperation.PRINT_PIT:
+    if adapter_name == 'integrated-runtime':
+      return PitSource.INTEGRATED_RUNTIME_PRINT_PIT
+    return PitSource.HEIMDALL_PRINT_PIT
+  if operation == HeimdallOperation.DOWNLOAD_PIT:
+    if adapter_name == 'integrated-runtime':
+      return PitSource.INTEGRATED_RUNTIME_DOWNLOAD_PIT
+    return PitSource.HEIMDALL_DOWNLOAD_PIT
+  raise ValueError(
+    'PIT inspection requires Heimdall print-pit or download-pit output.'
+  )
+
+
+def _fallback_reason_for_source(source: PitSource) -> str:
+  """Return the boundary note for the current PIT acquisition source."""
+
+  if source in (
+    PitSource.INTEGRATED_RUNTIME_PRINT_PIT,
+    PitSource.INTEGRATED_RUNTIME_DOWNLOAD_PIT,
+  ):
+    return (
+      'PIT acquisition is running through the supported path; '
+      'delegated lower-transport details stay packaged behind the supported path.'
+    )
+  return (
+    'PIT acquisition currently depends on the Heimdall adapter while '
+    'repo-owned PIT parsing and inspection mature.'
+  )
+
+
+def _source_path_label(source: PitSource) -> str:
+  """Return one operator-facing label for the PIT source boundary."""
+
+  if source == PitSource.INTEGRATED_RUNTIME_PRINT_PIT:
+    return 'the supported-path print-pit lane'
+  if source == PitSource.INTEGRATED_RUNTIME_DOWNLOAD_PIT:
+    return 'the supported-path download-pit lane'
+  if source == PitSource.HEIMDALL_PRINT_PIT:
+    return 'the Heimdall print-pit path'
+  return 'the Heimdall download-pit path'
 
 
 def _normalized_truth_value(value: Optional[str]) -> Optional[str]:
